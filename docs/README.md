@@ -11,14 +11,22 @@ Team: Vaibhav (lead), Krithi, Teammate 2. Target: top 10 in the 72-hour window.
 
 ## Lessons (build the prototype one piece at a time)
 
-| # | Lesson | Status |
-| --- | --- | --- |
-| 1 | [The metric (SMAPE)](lessons/01-metric.md) | Done |
-| 2 | [Looking at the 2025 data](lessons/02-data.md) | Done |
-| 3 | Loader and fold file | Next |
-| 4 | Median submission + validator | — |
-| 5 | TF-IDF + Ridge baseline | — |
-| 6 | Features, embeddings, nearest-neighbour prices, blend | — |
+Each lesson builds one item of the "Build before the drop" checklist in `decision-review.md`. Lesson 12 is the full timed rehearsal.
+
+| # | Lesson | Builds | Needs GPU | Status |
+| --- | --- | --- | --- | --- |
+| 1 | [The metric (SMAPE)](lessons/01-metric.md) | `metrics.py` (SMAPE) | No | Done |
+| 2 | [Looking at the 2025 data](lessons/02-data.md) | `02_eda.py` (reusable day-1 checks) | No | Done |
+| 3 | Loader and fold file | `loader.py`, `folds.csv` (random / stratified / group) | No | Next |
+| 4 | First submission | `submit.py` validator + median submission | No | — |
+| 5 | First real model | TF-IDF + Ridge baseline; the `preds/` OOF format every model follows | No | — |
+| 6 | Reading the text properly | Value/Unit parser, unit normaliser, regex features | No | — |
+| 7 | Getting the photos | Resumable, resizing image downloader | No | — |
+| 8 | Turning text and photos into numbers | Embedding cache (one text model, one image model) | Helpful | — |
+| 9 | Tree model + "similar products" prices | LightGBM on features + kNN price features | No | — |
+| 10 | The big model | Fine-tuned text encoder with a price head | **Yes** | — |
+| 11 | Mixing models | Blend + scale factor + clipping → final submission | No | — |
+| 12 | Hour-0 rehearsal | Full pipeline end to end, timed, plus a 1-page write-up draft | Yes | — |
 
 Where `decision-review.md` conflicts with the other files, it wins.
 

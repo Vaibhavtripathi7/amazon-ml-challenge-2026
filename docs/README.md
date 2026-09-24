@@ -1,35 +1,58 @@
-# Docs — Amazon ML Challenge 2026
+# Amazon ML Challenge 2026 — Business Entity Resolution
 
-Team: Vaibhav (lead), Krithi, Teammate 2. Target: top 10 in the 72-hour window.
+Team: Vaibhav (lead), Krithi, Teammate 2. Hackathon: 72 h from 2026-09-25 12:00. Uploads: 5 per day.
 
-| File | What it holds |
-| --- | --- |
-| [toolkit.md](toolkit.md) | **What code is ready, what each piece does, how to run it** |
-| [hour0-runbook.md](hour0-runbook.md) | **Hackathon day: step-by-step from minute 0, submission log.** 72 h from 2026-09-24 12:00, 5 uploads/day |
-| [decision-review.md](decision-review.md) | Revised decisions, metric playbook, roles + timeline, pre-drop checklist, open questions. **Start here.** |
-| [strategy.md](strategy.md) | Original strategy: metric/transform, features, validation, ensembling |
-| [work-split.md](work-split.md) | Original roles, phase timeline, open decisions |
-| [architecture.md](architecture.md) | Pipeline modules, data flow, what's built before vs. after the drop |
+Official files: `data-2026/student_resource/student_resource/` (README, `utils/validate_submission.py`, `Documentation_template.md`, `dataset/`). The data is not in git.
 
-## Lessons (build the prototype one piece at a time)
+## The task (from the official README)
 
-Each lesson builds one item of the "Build before the drop" checklist in `decision-review.md`. Lesson 12 is the full timed rehearsal.
+- **3 sources** of business records, with columns `entity_id`, `business_name`, `business_address`, `country`. The source is given by the ID prefix: `S1-`, `S2-` or `S3-`.
+- **Source 1** is the deduplicated reference. For **every Source 1 entity**, find all Source 2 and Source 3 records that are the same real-world business. That can be zero, one or many.
+- **Noise:** name abbreviations, legal suffixes, DBA names, `&` vs "and", word order, typos, transliterations (Hindi script seen). Addresses: Rd/Road, missing PIN or state, landmark references ("Near SBI ATM"), reordered parts.
+- **Countries:** train has `US` and `India`. **Test also has `France`, which isn't in train.** Don't hard-code the country list.
 
-| # | Lesson | Builds | Needs GPU | Status |
+## Data size
+
+| Split | Source 1 | Source 2 | Source 3 | Labels |
 | --- | --- | --- | --- | --- |
-| 1 | [The metric (SMAPE)](lessons/01-metric.md) | `metrics.py` (SMAPE) | No | Done |
-| 2 | [Looking at the 2025 data](lessons/02-data.md) | `02_eda.py` (reusable day-1 checks) | No | Done |
-| 3 | Loader and fold file | `loader.py`, `folds.csv` (random / stratified / group) | No | Next |
-| 4 | First submission | `submit.py` validator + median submission | No | — |
-| 5 | First real model | TF-IDF + Ridge baseline; the `preds/` OOF format every model follows | No | — |
-| 6 | Reading the text properly | Value/Unit parser, unit normaliser, regex features | No | — |
-| 7 | Getting the photos | Resumable, resizing image downloader | No | — |
-| 8 | Turning text and photos into numbers | Embedding cache (one text model, one image model) | Helpful | — |
-| 9 | Tree model + "similar products" prices | LightGBM on features + kNN price features | No | — |
-| 10 | The big model | Fine-tuned text encoder with a price head | **Yes** | — |
-| 11 | Mixing models | Blend + scale factor + clipping → final submission | No | — |
-| 12 | Hour-0 rehearsal | Full pipeline end to end, timed, plus a 1-page write-up draft | Yes | — |
+| Train | 2.2M | 5.0M | 5.3M | `train_ground_truth.tsv`: one row per S1 entity, comma-separated matches (empty = no match) |
+| Test | 1.7M | 4.9M | 5.1M | — |
 
-Where `decision-review.md` conflicts with the other files, it wins.
+All files are **tab-separated** (`sep="\t"`). About 2.4 GB in total.
 
-Constraint: no external data or scraping — provided dataset only.
+## Metric
+
+**F0.5, macro-averaged per Source 1 entity** (precision counts 2× recall):
+
+```
+F_0.5 = (1.25 × Precision × Recall) / (0.25 × Precision + Recall)
+```
+
+- Computed per S1 entity, then averaged over all S1 entities.
+- An S1 entity with no true matches scores **1.0** for an empty prediction and **0.0** for any prediction.
+- Public LB uses a subset of test; **final ranking uses the private remainder**.
+
+## What we submit
+
+| File | Scored | Content |
+| --- | --- | --- |
+| `output/matching_results.tsv` | **Yes** (upload) | Columns `source1_entity_id`, `matched_entity_ids`: one row per test S1 entity |
+| `output/candidate_pairs.tsv` | No (required in zip) | Columns `source1_entity_id`, `candidate_entity_ids`: the exact candidate set the matching model scored. Final matches must be a subset |
+| Final zip | Top teams reviewed | `output/` + `code/business_entity_resolution/` (`src/`, `README.md`, pinned `requirements.txt`) + filled `Documentation_template.md` |
+
+Check before every upload (run from `student_resource/`):
+
+```
+python3 utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir dataset/test
+```
+
+## Rules
+
+- Models: at most 8B parameters, MIT or Apache 2.0 licence.
+- **No external lookups:** no entity-resolution APIs, no business registries, no geocoding APIs, no internet data.
+
+## Our setup
+
+- Python 3.12 via uv: `uv sync`, then `uv run ...`. This laptop has 5.7 GB of RAM and no GPU.
+- `src/amlc/`: our package (empty, fresh start).
+- `docs/archive-2025/`: the 2025 price-challenge prep (lessons, plans, experiments), kept for reference. The code from that prep is in git tag `prep-2025-price` (`git checkout prep-2025-price -- <path>` restores any file).

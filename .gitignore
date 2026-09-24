@@ -1,22 +1,17 @@
-# Data and generated artifacts (never commit)
-data/raw/
-data/images/
-features/cache/
+# Competition data and generated outputs (never commit)
+data-2026/
+Prev-year-data-files/
+output/
+features/
 preds/
-submissions/
 *.npy
 *.parquet
+*.tsv
 *.csv
-!sample_submission*.csv
 
 # Python
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 .ipynb_checkpoints/
-Prev-year-data-files/
-folds.csv
-data/
-dataset/
-download.log
-features/

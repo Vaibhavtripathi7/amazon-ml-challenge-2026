@@ -2,6 +2,8 @@
 
 Team: Vaibhav (lead), Krithi, Teammate 2. Hackathon: 72 h from 2026-09-25 12:00. Uploads: 5 per day.
 
+Docs: [analysis.md](analysis.md) (what the data shows) · [plan.md](plan.md) (pipeline, timeline, roles, open questions)
+
 Official files: `data-2026/student_resource/student_resource/` (README, `utils/validate_submission.py`, `Documentation_template.md`, `dataset/`). The data is not in git.
 
 ## The task (from the official README)

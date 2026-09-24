@@ -1,0 +1,16 @@
+# Data and generated artifacts (never commit)
+data/raw/
+data/images/
+features/cache/
+preds/
+submissions/
+*.npy
+*.parquet
+*.csv
+!sample_submission*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/

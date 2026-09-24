@@ -4,6 +4,7 @@ Team: Vaibhav (lead), Krithi, Teammate 2. Target: top 10 in the 72-hour window.
 
 | File | What it holds |
 | --- | --- |
+| [hour0-runbook.md](hour0-runbook.md) | **Hackathon day: step-by-step from minute 0, submission log.** 72 h from 2026-09-24 12:00, 5 uploads/day |
 | [decision-review.md](decision-review.md) | Revised decisions, metric playbook, roles + timeline, pre-drop checklist, open questions. **Start here.** |
 | [strategy.md](strategy.md) | Original strategy: metric/transform, features, validation, ensembling |
 | [work-split.md](work-split.md) | Original roles, phase timeline, open decisions |

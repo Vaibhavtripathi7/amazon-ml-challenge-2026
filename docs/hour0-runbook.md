@@ -55,5 +55,5 @@ Follow the timeline in [`decision-review.md`](decision-review.md#roles-and-timel
 | What | 2025 result |
 | --- | --- |
 | Median-only CV SMAPE | about 72.7 |
-| TF-IDF + Ridge CV SMAPE | _filled in after the dry run_ |
+| TF-IDF + Ridge CV SMAPE | **52.03** (5.5 min on the laptop, peak 2.1 GB RAM) |
 | Image download | 300 images in 25 s with 32 workers (about 12/s); about 50 KB each at 512 px |

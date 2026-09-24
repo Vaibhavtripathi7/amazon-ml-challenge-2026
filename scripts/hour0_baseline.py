@@ -4,13 +4,14 @@ uv run python scripts/hour0_baseline.py --data <dataset dir> [--text catalog_con
 Writes: folds.csv, preds/<model>_{oof,test}.parquet, submissions/<model>.csv
 """
 import argparse
+import resource
 import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.sparse import hstack
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer, TfidfVectorizer
 from sklearn.linear_model import Ridge
 
 from amlc.data import ID, load, make_folds
@@ -53,21 +54,26 @@ for k in range(args.folds):
     oof[fold == k] = np.median(y[fold != k])
 save("median", oof, np.full(len(test), np.median(y)))
 
-# 3. TF-IDF (words + character pieces) -> Ridge on log1p(target)
+# 3. TF-IDF words + hashed character pieces -> Ridge on log1p(target)
+# Low-memory: hashing keeps no vocabulary, float32 halves storage, and the text matrix is built
+# once and sliced per fold (IDF uses no prices, so fitting it on all train text leaks nothing).
 t = time.time()
-word = TfidfVectorizer(ngram_range=(1, 2), min_df=3, max_features=200_000, sublinear_tf=True)
-char = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=5, max_features=200_000, sublinear_tf=True)
 text_tr, text_te = train[args.text].fillna(""), test[args.text].fillna("")
+word = TfidfVectorizer(ngram_range=(1, 2), min_df=3, max_features=100_000, sublinear_tf=True, dtype=np.float32)
+char_hash = HashingVectorizer(analyzer="char_wb", ngram_range=(3, 4), n_features=2**19,
+                              alternate_sign=False, norm=None, dtype=np.float32)
+char_idf = TfidfTransformer(sublinear_tf=True)
+head = lambda s: s.str.slice(0, 600)  # char pieces from the start only (item name + first details): caps memory
+Xall = hstack([word.fit_transform(text_tr), char_idf.fit_transform(char_hash.transform(head(text_tr)))]).tocsr()
+Xte = hstack([word.transform(text_te), char_idf.transform(char_hash.transform(head(text_te)))]).tocsr()
+print(f"text matrix {Xall.shape}, {Xall.data.nbytes / 1e9:.2f} GB, built in {time.time() - t:.0f}s")
 oof = np.empty(len(train))
 for k in range(args.folds):
     tr, va = fold != k, fold == k
-    Xtr = hstack([word.fit_transform(text_tr[tr]), char.fit_transform(text_tr[tr])]).tocsr()
-    Xva = hstack([word.transform(text_tr[va]), char.transform(text_tr[va])]).tocsr()
-    oof[va] = np.expm1(Ridge(alpha=1.0).fit(Xtr, ylog[tr]).predict(Xva))
-Xall = hstack([word.fit_transform(text_tr), char.fit_transform(text_tr)]).tocsr()
-Xte = hstack([word.transform(text_te), char.transform(text_te)]).tocsr()
+    oof[va] = np.expm1(Ridge(alpha=1.0).fit(Xall[tr], ylog[tr]).predict(Xall[va]))
 test_pred = np.expm1(Ridge(alpha=1.0).fit(Xall, ylog).predict(Xte))
 
 lo, hi = np.quantile(y, [0.001, 0.999])
 save("tfidf_ridge", np.clip(oof, lo, hi), np.clip(test_pred, lo, hi))
 print(f"tfidf_ridge took {time.time() - t:.0f}s")
+print(f"peak memory {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6:.2f} GB")

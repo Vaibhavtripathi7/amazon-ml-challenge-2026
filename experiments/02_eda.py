@@ -1,12 +1,13 @@
-"""Lesson 2 experiment: first look at the 2025 data. Run: uv run python experiments/02_eda.py"""
+"""Lesson 2 experiment / day-1 checks. Run: uv run python experiments/02_eda.py [dataset dir]"""
 import re
+import sys
 
 import numpy as np
 import pandas as pd
 
 from amlc.metrics import smape
 
-D = "Prev-year-data-files/68e8d1d70b66d_student_resource/student_resource/dataset/"
+D = (sys.argv[1] if len(sys.argv) > 1 else "Prev-year-data-files/68e8d1d70b66d_student_resource/student_resource/dataset") + "/"
 tr = pd.read_csv(D + "train.csv")
 te = pd.read_csv(D + "test.csv")
 

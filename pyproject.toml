@@ -2,7 +2,12 @@
 name = "amlc"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
-dependencies = ["numpy", "pandas"]
+dependencies = [
+    "numpy",
+    "pandas",
+    "pillow>=12.3.0",
+    "requests>=2.34.2",
+]
 
 [dependency-groups]
 dev = ["pytest"]

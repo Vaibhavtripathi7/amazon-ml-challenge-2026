@@ -11,10 +11,10 @@ Ordered by expected leaderboard impact. "Keep" means the original call stands bu
 | # | Original decision | Revised decision | Why |
 | --- | --- | --- | --- |
 | 1 | Train on `log1p(target)`, invert with `expm1` | Keep, but train with an L1 or Huber loss on the log target, then tune one global scale factor (around 0.90–1.05) on out-of-fold (OOF) predictions | SMAPE is symmetric in ratio terms (2× and ½× the true price both cost 66.7%), so log space is its natural scale; MSE on raw price chases the mean and scores worse. The scale factor is a cheap check for model bias, not a built-in SMAPE preference: on unbiased synthetic predictions the best scale was exactly 1.00. |
-| 2 | Group CV folds by brand or product cluster | First run adversarial validation plus a brand/image-hash overlap check between train and test, then pick the split that matches it | If test was drawn at random, group folds are too pessimistic and steer you away from memorisation features that do work on the leaderboard. Group folds only when test brands are unseen. |
+| 2 | Group CV folds by brand or product cluster | **Stratified K-fold on log-price bins** by default. Re-check on day 1 with adversarial validation and the brand/image overlap check from `experiments/02_eda.py`; switch to group folds only if test brands turn out unseen | 2025 data ([lesson 2](lessons/02-data.md)): train/test `sample_id`s interleave, 73% of test brands appear in train, 6.7% of test images appear in train. That is a random split, so group folds would be too pessimistic. |
 | 3 | Frozen embeddings plus a GBM as the main model | Add nearest-neighbour target features (mean log target of the k closest train items in text and image embedding space, computed out of fold) | In catalogue pricing, near-duplicate listings are the strongest signal. kNN features capture them cheaply, and trees can't find them from raw embedding columns. |
 | 4 | Ratio features "e.g. price per unit" | Ratios between inputs only (total quantity = pack count × unit size). Also try predicting log(price ÷ total quantity) and adding log quantity back | Price per unit is built from the target, so it leaks. Reframing the target so the model learns unit price is the legitimate version of the same idea. |
-| 5 | OCR every product image | Conditional: OCR a 2k-image sample first and run it at full scale only if it recovers quantity or size for at least 10% of rows where text regex fails | OCR over about 75k images takes GPU hours. Catalogue text usually already holds those facts. |
+| 5 | OCR every product image | Conditional: OCR a 2k-image sample first and run it at full scale only if it recovers quantity or size for at least 10% of rows where text parsing fails | 2025 text already has `Value` and `Unit` fields with the total quantity for 98.7% of rows, so OCR has little left to add. OCR over 75k images also takes GPU hours. |
 | 6 | Blend three models, weighted by validation score | Every model writes OOF and test predictions using the one shared fold file. Blend in log space with non-negative least squares or hill climbing on OOF | Score-proportional weights ignore correlation between models. Stacking on shared folds is what makes the blend trustworthy. |
 | 7 | LightGBM vs CatBoost is an open decision | Not a decision: LightGBM first for speed, CatBoost later as a blend member. Add one fine-tuned text encoder (regression head on the log target) as the high-ceiling model | Two GBMs on the same features add little diversity. A fine-tuned transformer is the model most likely to separate top 10 from top 50. |
 | 8 | Clip to plausible bounds | Clip in log space to the train target range from the 0.1th to 99.9th percentile | This is concrete and reproducible, and it avoids hand-set bounds. |
@@ -62,7 +62,7 @@ Plan sleep in shifts so a GPU job always runs overnight. Queue the long fine-tun
 The biggest lever you still control is running the whole pipeline end to end on last year's price dataset (or a synthetic stand-in) before hour 0. Every item below should run on that data first.
 
 - [ ] `loader.py` and `folds.csv` generator, with random, stratified and group modes behind one flag
-- [ ] Parallel, resumable image downloader with retries and a failure manifest; measure images per minute to plan the real run
+- [ ] Parallel, resumable image downloader with retries and a failure manifest; **resize to 512 px as it saves**. Measured in 2025: about 7 images/s with 16 threads, about 270 KB each at full size, so 150k images take about 6 h and 40 GB unresized, or about 4 GB resized. Start it at minute 0
 - [ ] Embedding cache script (one text model, one image model) writing float16 `.npy` files keyed by `sample_id`
 - [ ] kNN OOF feature builder on top of that cache (for example FAISS or sklearn NearestNeighbors)
 - [ ] Regex library for quantity, units and dimensions, with unit-normalisation tests (500ml = 0.5L = 500 ml)
@@ -74,7 +74,7 @@ The biggest lever you still control is running the whole pipeline end to end on 
 
 ## Open questions
 
-- [ ] Pretrained model rules: last year's (2025) rules reportedly capped model size at about 8B parameters and required permissive licences (MIT/Apache). This is from memory and unverified, so check this year's rules before picking the fine-tune model.
+- [x] Pretrained model rules: **confirmed for 2025**. Models up to 8B parameters, MIT or Apache 2.0 licence only. Re-check this year's README at hour 0.
 - [ ] Compute: which GPUs and how many hours are available across the 72 hours? This decides whether the fine-tuned encoder is a base model or a large one.
 - [ ] Submission limits per day, and whether the final pick is one submission or two (if two: one CV-best, one more aggressive blend).
-- [ ] What the writeup or finale needs (length, format), so Krithi can scope it from hour 0.
+- [x] Writeup: **confirmed for 2025**. A 1-page document (template in `Prev-year-data-files/.../Documentation_template.md`) that counts toward the final ranking together with the full 75k-row test score. The public LB uses 25k of the 75k test rows.

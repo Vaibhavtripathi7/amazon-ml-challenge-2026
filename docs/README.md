@@ -14,8 +14,8 @@ Team: Vaibhav (lead), Krithi, Teammate 2. Target: top 10 in the 72-hour window.
 | # | Lesson | Status |
 | --- | --- | --- |
 | 1 | [The metric (SMAPE)](lessons/01-metric.md) | Done |
-| 2 | Looking at the 2025 data | Next |
-| 3 | Loader and fold file | — |
+| 2 | [Looking at the 2025 data](lessons/02-data.md) | Done |
+| 3 | Loader and fold file | Next |
 | 4 | Median submission + validator | — |
 | 5 | TF-IDF + Ridge baseline | — |
 | 6 | Features, embeddings, nearest-neighbour prices, blend | — |

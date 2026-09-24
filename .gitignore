@@ -14,3 +14,4 @@ __pycache__/
 *.pyc
 .venv/
 .ipynb_checkpoints/
+Prev-year-data-files/

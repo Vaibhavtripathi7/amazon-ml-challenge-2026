@@ -10,13 +10,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.sparse import hstack
-from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer, TfidfVectorizer
 from sklearn.linear_model import Ridge
 
 from amlc.data import ID, load, make_folds
 from amlc.metrics import smape
 from amlc.submit import write_submission
+from amlc.text_features import tfidf_matrices
 
 p = argparse.ArgumentParser()
 p.add_argument("--data", required=True)
@@ -54,18 +53,9 @@ for k in range(args.folds):
     oof[fold == k] = np.median(y[fold != k])
 save("median", oof, np.full(len(test), np.median(y)))
 
-# 3. TF-IDF words + hashed character pieces -> Ridge on log1p(target)
-# Low-memory: hashing keeps no vocabulary, float32 halves storage, and the text matrix is built
-# once and sliced per fold (IDF uses no prices, so fitting it on all train text leaks nothing).
+# 3. TF-IDF words + hashed character pieces -> Ridge on log1p(target); matrix built once, sliced per fold
 t = time.time()
-text_tr, text_te = train[args.text].fillna(""), test[args.text].fillna("")
-word = TfidfVectorizer(ngram_range=(1, 2), min_df=3, max_features=100_000, sublinear_tf=True, dtype=np.float32)
-char_hash = HashingVectorizer(analyzer="char_wb", ngram_range=(3, 4), n_features=2**19,
-                              alternate_sign=False, norm=None, dtype=np.float32)
-char_idf = TfidfTransformer(sublinear_tf=True)
-head = lambda s: s.str.slice(0, 600)  # char pieces from the start only (item name + first details): caps memory
-Xall = hstack([word.fit_transform(text_tr), char_idf.fit_transform(char_hash.transform(head(text_tr)))]).tocsr()
-Xte = hstack([word.transform(text_te), char_idf.transform(char_hash.transform(head(text_te)))]).tocsr()
+Xall, Xte = tfidf_matrices(train[args.text], test[args.text])
 print(f"text matrix {Xall.shape}, {Xall.data.nbytes / 1e9:.2f} GB, built in {time.time() - t:.0f}s")
 oof = np.empty(len(train))
 for k in range(args.folds):

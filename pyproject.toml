@@ -27,3 +27,6 @@ packages = ["src/amlc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/amlc/resources" = "amlc/resources"

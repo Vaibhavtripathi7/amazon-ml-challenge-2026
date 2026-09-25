@@ -71,3 +71,9 @@ flowchart LR
 - [ ] **Holdout design** (section 2).
 - [ ] **Compute platform** (section 5).
 - [ ] Which reusable pieces from the 2025 prep to restore (tag `prep-2025-price`): the top-k similarity search, the low-memory character TF-IDF, LightGBM.
+
+## Submission log
+
+| # | Date/time | What | Train F0.5 | Public LB | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 2026-09-26 | Rule baseline (`scripts/baseline_rules.py`): same country + cleaned name key + house number | 0.554 (200k S1) | **0.56** | Train estimate matches LB. Shortlist recall on train 48.7%. Top of LB at the time: 0.9858 |

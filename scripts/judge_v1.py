@@ -220,6 +220,26 @@ def cmd_dev(a):
     Path(a.model + ".json").write_text(json.dumps({"threshold": t_best}))
     log(f"best threshold {t_best:.2f} saved to {a.model}.json")
 
+    # ---- loss breakdown at the chosen threshold: where do the points go?
+    f = lambda d: dev_f05(d.s1_idx.to_numpy(), d.rec_id.to_numpy(), d.full.to_numpy(), truth, dev_idx, country, w_other)
+    is_true = lambda d: np.fromiter((r in truth.get(s, ()) for s, r in zip(d.s1_idx, d.rec_id)), bool, len(d))
+    oracle = dev_pairs[is_true(dev_pairs)].drop_duplicates("rec_id")        # perfect judge on the model input
+    chosen = best[best.prob >= t_best]
+    no_fp = chosen[is_true(chosen)]                                         # same decisions minus false merges
+    (o, oc, *_), (n_, nc, *_), (s_, sc, *_) = f(oracle), f(no_fp), f(chosen)
+    print(f"\nloss breakdown at t={t_best:.2f} (macro F0.5 points out of 1.0):")
+    print(f"  best possible with this shortlist (perfect judge) : {o:.4f}   lost to shortlist misses : {1 - o:.4f}")
+    print(f"  lost by the judge rejecting true matches         : {o - n_:.4f}")
+    print(f"  lost by wrong merges (false positives)            : {n_ - s_:.4f}")
+    print(f"  = actual dev F0.5                                 : {s_:.4f}")
+    for c in sorted(oc):
+        print(f"  {c:8s} ceiling {oc[c]:.4f} | judge misses -{oc[c] - nc[c]:.4f} | wrong merges -{nc[c] - sc[c]:.4f} "
+              f"| actual {sc[c]:.4f}")
+    out = pairs.assign(s1_id=s1.entity_id.to_numpy()[pairs.s1_idx.to_numpy()],
+                       is_true=is_true(pairs), is_dev_s1=np.isin(pairs.s1_idx, dev_idx))
+    out[["s1_id", "rec_id", "prob", "full", "is_true", "is_dev_s1"]].to_parquet(a.dev_pairs_out, index=False)
+    log(f"saved scored dev pairs to {a.dev_pairs_out} (for mistake sheets without re-running)")
+
 
 def cmd_test(a):
     split = a.split
@@ -247,6 +267,7 @@ p.add_argument("cmd", choices=["train", "dev", "test"])
 p.add_argument("--work", default="work")
 p.add_argument("--model", default="models/judge_v1.txt")
 p.add_argument("--out", default="output")
+p.add_argument("--dev-pairs-out", default="dev_pairs.parquet")
 p.add_argument("--split", default="test", help="test: which split to write (train only for local smoke checks)")
 p.add_argument("--threshold", type=float, default=None)
 p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])

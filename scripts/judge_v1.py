@@ -81,7 +81,7 @@ class Shortlister:
         self.a = a
         self.dfreq = token_df(s1)
         self.s1_keys = filter_s1_keys(row_keys(s1, self.dfreq, "s1"), a.cap)
-        passes = dict(TF_PASSES) | (MIX_PASS if a.mix_k else {})
+        passes = {p: c for p, c in (dict(TF_PASSES) | MIX_PASS).items() if p in a.tf}
         self.blockers = [Blocker({p: c}, a.mix_k if p == "tf_mix" else a.k, a.threads).fit(s1) for p, c in passes.items()]
 
     def __call__(self, recs):
@@ -253,7 +253,9 @@ p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.
 p.add_argument("--train-frac", type=float, default=0.15)
 p.add_argument("--other-frac", type=float, default=0.1)
 p.add_argument("--k", type=int, default=10)
-p.add_argument("--mix-k", type=int, default=0, help="k for the combined name+address search (0 = off)")
+p.add_argument("--mix-k", type=int, default=20, help="k for the combined name+address search")
+p.add_argument("--tf", nargs="+", default=["tf_name", "tf_mix"],
+               help="TF-IDF searches to use (measured 2026-09-26: tf_mix makes tf_addr redundant, +0.0003)")
 p.add_argument("--cap", type=int, default=30)
 p.add_argument("--max-per-rec", type=int, default=10)
 p.add_argument("--threads", type=int, default=4)

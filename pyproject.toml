@@ -11,6 +11,7 @@ dependencies = [
     "rapidfuzz>=3.14.6",
     "scikit-learn>=1.9.1",
     "scipy>=1.17.1",
+    "sparse-dot-topn>=1.2.0",
     "tqdm>=4.70.1",
 ]
 

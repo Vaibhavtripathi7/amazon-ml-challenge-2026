@@ -12,6 +12,8 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from amlc.clean import clean_address, clean_name
 
@@ -44,10 +46,14 @@ if __name__ == "__main__":
             out.mkdir(parents=True, exist_ok=True)
             for s in (1, 2, 3):
                 chunks = read(Path(args.data) / split / f"{split}_source{s}.tsv", chunksize=200_000, nrows=args.limit)
-                df = pd.concat(pool.imap(_clean_chunk, chunks), ignore_index=True)
-                df.to_parquet(out / f"source{s}.parquet", index=False)
-                print(f"{split} source{s}: {len(df):,} rows  [{time.time() - t0:.0f}s]", flush=True)
-                del df
+                writer, n = None, 0
+                for df in pool.imap(_clean_chunk, chunks):  # write chunk by chunk: memory stays flat
+                    table = pa.Table.from_pandas(df, preserve_index=False)
+                    writer = writer or pq.ParquetWriter(out / f"source{s}.parquet", table.schema)
+                    writer.write_table(table)
+                    n += len(df)
+                writer.close()
+                print(f"{split} source{s}: {n:,} rows  [{time.time() - t0:.0f}s]", flush=True)
             if split == "train":
                 gt = read(Path(args.data) / "train" / "train_ground_truth.tsv")
                 gt.to_parquet(out / "truth.parquet", index=False)

@@ -16,6 +16,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from amlc.clean import clean_address, clean_name
+from amlc.norm import parse_address, parse_name
 
 
 def _clean_chunk(df):
@@ -24,6 +25,13 @@ def _clean_chunk(df):
     addr = [clean_address(s) for s in df.raw_address]
     df["addr"] = [a for a, _ in addr]
     df["nums"] = [n for _, n in addr]
+    # stage-0 slots (amlc.norm): n_* name fields, a_* address fields
+    names = [parse_name(s) for s in df.raw_name]
+    for k in ("core", "key", "fold", "flat", "suffix", "alias", "is_domain"):
+        df["n_" + k] = [n[k] for n in names]
+    addrs = [parse_address(s, c) for s, c in zip(df.raw_address, df.country)]
+    for k in ("house", "house_alts", "unit", "street", "street_type", "city", "state", "locality", "tokens", "has_addr"):
+        df["a_" + k] = [x[k] for x in addrs]
     return df
 
 

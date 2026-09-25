@@ -12,11 +12,14 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sparse_dot_topn import sp_matmul_topn
 
+# max_df: skip tokens present in more than that share of S1 rows. They barely separate businesses but
+# make the search explode (every record would be compared with most of S1). Applied only on large inputs.
 PASSES = {
-    "name_word": dict(field="name", analyzer="word", ngram_range=(1, 1), min_df=1),
-    "name_char": dict(field="name", analyzer="char_wb", ngram_range=(3, 3), min_df=1),
-    "addr": dict(field="addr_full", analyzer="word", ngram_range=(1, 1), min_df=1),
+    "name_word": dict(field="name", analyzer="word", ngram_range=(1, 1), min_df=1, max_df=0.05),
+    "name_char": dict(field="name", analyzer="char_wb", ngram_range=(3, 3), min_df=1, max_df=0.02),
+    "addr": dict(field="addr_full", analyzer="word", ngram_range=(1, 1), min_df=1, max_df=0.05),
 }
+MAX_DF_MIN_ROWS = 10_000
 
 
 def _addr_full(df):
@@ -51,6 +54,8 @@ def candidates(s1, recs, k=10, passes=PASSES, n_threads=4, keep_s1=None, verbose
             field = cfg.pop("field")
             s_text = (s1_addr if field == "addr_full" else s1[field]).iloc[S_pos]
             r_text = (rec_addr if field == "addr_full" else recs[field]).iloc[R_pos]
+            if len(s_text) < MAX_DF_MIN_ROWS:
+                cfg["max_df"] = 1.0
             vec = TfidfVectorizer(sublinear_tf=True, dtype=np.float32, **cfg).fit(s_text)
             ri, si, sc, rk = _topk(vec.transform(r_text), vec.transform(s_text), k, n_threads)
             s_glob, r_glob = S_pos[si].astype(np.int32), R_pos[ri].astype(np.int32)

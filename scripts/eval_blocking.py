@@ -1,6 +1,7 @@
 """Measure shortlist recall on a dev slice of train (10% of S1 by id hash), searching against ALL train S1.
 
 python -u scripts/eval_blocking.py --work work [--k 10] [--other-frac 0.1] [--threads 4]
+Quick local check: nice -n 19 python -u scripts/eval_blocking.py --work work --sample 0.02 --other-frac 0.002 --threads 1
 Queries = every record truly matched to a dev S1 + a random `other-frac` of all other records
 (those only inflate candidate counts, so they are scaled back up when reporting size).
 """
@@ -39,11 +40,15 @@ p.add_argument("--work", default="work")
 p.add_argument("--k", type=int, default=10)
 p.add_argument("--other-frac", type=float, default=0.1)
 p.add_argument("--threads", type=int, default=4)
+p.add_argument("--sample", type=float, default=None,
+               help="use only this share of S1 (e.g. 0.02): a quick end-to-end check, not a real measurement")
 args = p.parse_args()
 t0 = time.time()
 W = f"{args.work}/train"
 
 s1 = pd.read_parquet(f"{W}/source1.parquet", columns=COLS)
+if args.sample:
+    s1 = s1[bucket(s1.entity_id, 1000) < args.sample * 1000].reset_index(drop=True)
 is_dev = bucket(s1.entity_id) == 0
 gt = pd.read_parquet(f"{W}/truth.parquet")
 gt = gt[gt.source1_entity_id.isin(set(s1.entity_id[is_dev]))]
@@ -59,6 +64,7 @@ print(f"dev S1 {is_dev.sum():,} | true pairs {len(truth):,} | queries {len(recs)
 s1_pos = pd.Series(np.arange(len(s1)), index=s1.entity_id)
 rec_pos = pd.Series(np.arange(len(recs)), index=recs.entity_id)
 n = len(recs)
+rec_is_matched = recs.entity_id.isin(matched).to_numpy()  # fully included; the rest is an other-frac sample
 t_s1 = s1_pos[truth.source1_entity_id].to_numpy()
 t_key = t_s1 * n + rec_pos[truth.rec_id].to_numpy()
 del gt, truth, matched
@@ -73,8 +79,11 @@ for pname in list(PASSES) + ["UNION"]:
     print(f"  {pname:10s} {np.isin(t_key, keys).mean():.4f}")
 u = np.unique(c_key)
 is_true = np.isin(u, t_key)
-per_s1 = (is_true.sum() + (~is_true).sum() / args.other_frac) / is_dev.sum()
-print(f"\ncandidates per dev S1 (estimated at full scale): {per_s1:.1f}  (true matches per S1: {len(t_key) / is_dev.sum():.2f})")
+from_matched = rec_is_matched[u % n]
+per_s1 = (is_true.sum() + (~is_true & from_matched).sum()
+          + (~is_true & ~from_matched).sum() / args.other_frac) / is_dev.sum()
+print(f"\ncandidates per dev S1 (estimated at full scale): {per_s1:.1f}  (true matches per S1: {len(t_key) / is_dev.sum():.2f})"
+      + ("  [--sample: size estimate NOT meaningful, S1 is shrunk]" if args.sample else ""))
 found = np.isin(t_key, u)
 country = s1.country.to_numpy()[t_s1]
 print("union recall by country:", {c: round(found[country == c].mean(), 4) for c in np.unique(country)})

@@ -48,6 +48,12 @@ Check before every upload (run from `student_resource/`):
 python3 utils/validate_submission.py --matching output/matching_results.tsv --candidate output/candidate_pairs.tsv --test-dir dataset/test
 ```
 
+## Organiser update (2026-09-26): candidate set size counts
+
+- `candidate_pairs.tsv` and **the code that produces it** are reviewed for the **final ranking**, "alongside" the score.
+- **"The approach that generates a smaller candidate set per Source 1 entity will be ranked higher"**, beyond the public and private leaderboards. The weighting is not stated.
+- Our target: a top score **and** a small candidate set (a few per S1; true matches average about 3.5). Measure recall vs candidates per S1.
+
 ## Rules
 
 - Models: at most 8B parameters, MIT or Apache 2.0 licence.

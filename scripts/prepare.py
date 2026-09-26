@@ -7,6 +7,7 @@ Writes work/<split>/source{1,2,3}.parquet with columns:
 """
 import argparse
 import csv
+import os
 import time
 from multiprocessing import Pool
 from pathlib import Path
@@ -53,14 +54,20 @@ if __name__ == "__main__":
             out = Path(args.out) / split
             out.mkdir(parents=True, exist_ok=True)
             for s in (1, 2, 3):
+                final = out / f"source{s}.parquet"
+                if final.exists():                           # resumable: finished files are kept
+                    print(f"{split} source{s}: exists, skipped", flush=True)
+                    continue
+                tmp = out / f"source{s}.parquet.tmp"
                 chunks = read(Path(args.data) / split / f"{split}_source{s}.tsv", chunksize=200_000, nrows=args.limit)
                 writer, n = None, 0
                 for df in pool.imap(_clean_chunk, chunks):  # write chunk by chunk: memory stays flat
                     table = pa.Table.from_pandas(df, preserve_index=False)
-                    writer = writer or pq.ParquetWriter(out / f"source{s}.parquet", table.schema)
+                    writer = writer or pq.ParquetWriter(tmp, table.schema)
                     writer.write_table(table)
                     n += len(df)
                 writer.close()
+                os.replace(tmp, final)                       # atomic: a half-written file never looks finished
                 print(f"{split} source{s}: {n:,} rows  [{time.time() - t0:.0f}s]", flush=True)
             if split == "train":
                 gt = read(Path(args.data) / "train" / "train_ground_truth.tsv")

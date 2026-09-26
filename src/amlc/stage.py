@@ -27,7 +27,7 @@ TF_PASSES = {
     "tf_name": dict(field="n_core", analyzer="word", ngram_range=(1, 1), min_df=1, max_df=0.05),
     "tf_mix": dict(field="mix", analyzer="word", ngram_range=(1, 1), min_df=1, max_df=0.05),
 }
-TF_K = {"tf_name": 10, "tf_mix": 20}
+TF_K = {"tf_name": 20, "tf_mix": 40}   # deeper searches; stage 1 prunes, so candidate files do not grow
 TF = list(TF_PASSES)
 RANK_SET, JUDGE_SET, DEV_OTHER = (0, 4), (4, 44), (90, 100)
 DEV_OTHER_WEIGHT = 100 / (DEV_OTHER[1] - DEV_OTHER[0])

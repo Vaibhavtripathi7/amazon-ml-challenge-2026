@@ -60,3 +60,21 @@ def test_domain_records_get_segmented_name_fields():
     recs = frame([["S3-z", "US", "producernavimumbai.com", "Shop No. 4, Thane, MH"]])
     out = apply_segmentation(recs.copy(), make_segmenter(s1))
     assert out.n_core[0] == "producer navi mumbai" and out.n_key[0] == "mumbai navi producer"
+
+
+def test_ambiguity_features_see_namesakes_and_margin_before_pruning():
+    import collections
+    from amlc.stage import AMBIG_FEATURES, ambiguity_features
+    s1 = frame([["S1-a", "US", "Youth Services", "1 A Street, X, OH"],
+                ["S1-b", "US", "Youth Services", "2 B Street, Y, OH"],
+                ["S1-c", "US", "Youth Services", "3 C Street, Z, OH"],
+                ["S1-d", "US", "Rare Plutonian Works", "4 D Street, Z, OH"]])
+    recs = frame([["S3-x", "US", "Youth Services", ""], ["S3-y", "US", "Rare Plutonian Works", ""]])
+    f = pd.DataFrame({"s1_idx": [0, 1, 2, 3], "rec_idx": [0, 0, 0, 1]})
+    sc = np.array([0.5, 0.49, 0.48, 0.9])
+    counts = collections.Counter(zip(s1.country, s1.n_key))
+    X = ambiguity_features(f, sc, recs, s1, counts)
+    assert list(X.columns) == AMBIG_FEATURES
+    assert X.rec_name_count.tolist() == [3, 3, 3, 1] and X.s1_name_count.tolist() == [3, 3, 3, 1]
+    assert X.n_short.tolist() == [3, 3, 3, 1]
+    assert abs(X.s1_margin[0] - 0.01) < 1e-6 and X.s1_margin[3] == 0.9   # lone candidate: margin = its own score

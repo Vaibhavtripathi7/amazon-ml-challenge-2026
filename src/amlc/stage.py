@@ -92,7 +92,7 @@ def iter_records(work, split, keep=None, batch=300_000, seg=None):
 
 def record_set(name, owner, dev_ids, sample_s1_ids=None, sample=None):
     """keep() for a named record set (see module doc). With --sample, restrict to a self-consistent mini world."""
-    lo, hi = {"rank": RANK_SET, "judge": JUDGE_SET, "dev": DEV_OTHER}[name]
+    lo, hi = {"rank": RANK_SET, "judge": JUDGE_SET, "dev": DEV_OTHER, "devfull": (0, 100)}[name]
     rng = np.random.default_rng(0)
 
     def keep(df):
@@ -102,7 +102,7 @@ def record_set(name, owner, dev_ids, sample_s1_ids=None, sample=None):
         b = bucket(ids, 100)
         in_bucket = (b >= lo) & (b < hi)
         dev_owned = o.isin(dev_ids).to_numpy()
-        m = (dev_owned | in_bucket) if name == "dev" else (in_bucket & ~dev_owned)
+        m = (dev_owned | in_bucket) if name in ("dev", "devfull") else (in_bucket & ~dev_owned)
         if sample:
             in_world = (owned & o.isin(sample_s1_ids).to_numpy()) | (~owned & (rng.random(len(df)) < sample))
             m &= in_world
@@ -184,3 +184,32 @@ def top_n(rec_idx, score, n):
     rank = np.empty(len(order), np.int16)
     rank[order] = rank_sorted
     return keep, rank
+
+
+AMBIG_FEATURES = ["n_short", "s1_top2", "s1_margin", "rec_name_count", "s1_name_count"]
+
+
+def ambiguity_features(f, sc, recs, s1, name_counts):
+    """How ambiguous is each record, measured BEFORE stage-1 pruning (value-specific frequency / term-frequency
+    idea: agreement on a common name is weak evidence). f: shortlist pairs, sc: stage-1 scores aligned with f."""
+    ri, si = f.rec_idx.to_numpy(), f.s1_idx.to_numpy()
+    n = int(ri.max()) + 1 if len(ri) else 0
+    n_short = np.bincount(ri, minlength=n)[ri]
+    order = np.lexsort((-sc, ri))                                    # by record, best score first
+    r_sorted, s_sorted = ri[order], sc[order]
+    first = np.r_[True, r_sorted[1:] != r_sorted[:-1]]
+    second = np.r_[False, first[:-1]] & ~first
+    t1, t2 = np.zeros(n), np.zeros(n)
+    t1[r_sorted[first]] = s_sorted[first]
+    t2[r_sorted[second]] = s_sorted[second]
+    top1, top2 = t1[ri], t2[ri]
+    rc = recs.country.to_numpy()[ri]
+    rk, sk = recs.n_key.to_numpy()[ri], s1.n_key.to_numpy()[si]
+    sc_ = s1.country.to_numpy()[si]
+    return pd.DataFrame({
+        "n_short": n_short.astype(np.int16),
+        "s1_top2": top2.astype(np.float32),
+        "s1_margin": (top1 - top2).astype(np.float32),
+        "rec_name_count": np.fromiter((name_counts.get((c, k), 0) for c, k in zip(rc, rk)), np.int32, len(ri)),
+        "s1_name_count": np.fromiter((name_counts.get((c, k), 0) for c, k in zip(sc_, sk)), np.int32, len(si)),
+    })

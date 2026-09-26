@@ -20,10 +20,13 @@ import pandas as pd
 
 from amlc.judge_features import FEATURES, Context, pair_features
 from amlc.metric import dev_f05
-from amlc.stage import (DEV_OTHER_WEIGHT, RANK_FEATURES, Shortlister, bucket, iter_records, load_owner, load_s1, log,
-                        make_segmenter, rank_features, record_set, top_n)
+import collections
 
-J_FEATURES = FEATURES + ["s1_prob", "s1_rank", "src3"]
+from amlc.stage import (AMBIG_FEATURES, DEV_OTHER_WEIGHT, RANK_FEATURES, Shortlister, ambiguity_features, bucket,
+                        iter_records, load_owner, load_s1, log, make_segmenter, rank_features, record_set, top_n)
+
+J_BASE = FEATURES + ["s1_prob", "s1_rank", "src3"]
+J_SETS = {"base": J_BASE, "ambig": J_BASE + AMBIG_FEATURES}   # --features: A/B switch
 V1_RULE = "v1_rule"
 
 
@@ -173,11 +176,13 @@ def cmd_rank_eval(a):
 
 
 # ------------------------------------------------------------------ stage 2
-def stage12(sl, ctx, s1, recs, models, op, threads):
-    """Shortlist -> stage-1 score -> prune -> stage-2 features. Returns s_idx, r_idx, X (J_FEATURES)."""
+def stage12(sl, ctx, s1, recs, models, op, threads, name_counts):
+    """Shortlist -> stage-1 score -> ambiguity features (before pruning) -> prune -> stage-2 features.
+    Returns s_idx, r_idx, X with every candidate feature column (callers pick their feature set)."""
     f = sl(recs)
     X1 = rank_features(s1, recs, f, threads)
     sc = ranker_score(models, X1)
+    amb = ambiguity_features(f, sc, recs, s1, name_counts)
     keep, rank = top_n(f.rec_idx.to_numpy(), sc, op["top_n"])
     keep &= sc >= op.get("min_prob", 0.0)
     f = f[keep].reset_index(drop=True)
@@ -186,19 +191,25 @@ def stage12(sl, ctx, s1, recs, models, op, threads):
     X = pair_features(ctx, recs, s_idx, r_idx, flags, threads)
     X["s1_prob"], X["s1_rank"] = sc[keep].astype(np.float32), rank[keep]
     X["src3"] = recs.src3.to_numpy()[r_idx].astype(np.int8)
-    return s_idx, r_idx, X[J_FEATURES]
+    for c in AMBIG_FEATURES:
+        X[c] = amb[c].to_numpy()[keep]
+    return s_idx, r_idx, X
 
 
 def cmd_train(a):
     s1, owner, dev_ids = world(a)
     models, op = load_ranker(a)
     ctx, sl = Context(s1), Shortlister(s1, threads=a.threads)
-    log(f"train (stage 2): S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']} min_p {op.get('min_prob', 0)}")
+    name_counts = collections.Counter(zip(s1.country, s1.n_key))
+    feats = J_SETS[a.features]
+    log(f"train (stage 2): S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']} min_p {op.get('min_prob', 0)}; "
+        f"features '{a.features}' ({len(feats)})")
     s1_ids = s1.entity_id.to_numpy()
     Xs, ys, grp = [], [], []
     owned_n = kept_n = 0
     for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "judge", s1, owner, dev_ids), seg=make_segmenter(s1))):
-        s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads)
+        s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads, name_counts)
+        X = X[feats]
         own = owner.reindex(recs.entity_id.to_numpy()).to_numpy()
         y = (own[r_idx] == s1_ids[s_idx]).astype(np.int8)
         owned_n += pd.Series(own).isin(set(s1_ids)).sum()
@@ -217,7 +228,7 @@ def cmd_train(a):
                   callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(200)])
     Path(a.model).parent.mkdir(parents=True, exist_ok=True)
     m.save_model(a.model, num_iteration=m.best_iteration)
-    imp = pd.Series(m.feature_importance("gain"), J_FEATURES).sort_values(ascending=False)
+    imp = pd.Series(m.feature_importance("gain"), feats).sort_values(ascending=False)
     log(f"model saved {a.model}: best iter {m.best_iteration}, val logloss {m.best_score['valid_0']['binary_logloss']:.5f}")
     print("top features by gain:", (imp / imp.sum()).head(12).round(3).to_dict())
 
@@ -227,12 +238,14 @@ def scored(a, split, keep_fn):
     models, op = load_ranker(a)
     ctx, sl = Context(s1), Shortlister(s1, threads=a.threads)
     judge = lgb.Booster(model_file=a.model)
-    log(f"{split}: S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']}")
+    feats = judge.feature_name()                                  # always the features the model was trained on
+    name_counts = collections.Counter(zip(s1.country, s1.n_key))
+    log(f"{split}: S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']}; judge features {len(feats)}")
     parts = []
     keep = keep_fn(s1) if keep_fn else None
     for i, recs in enumerate(iter_records(a.work, split, keep, seg=make_segmenter(s1))):
-        s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads)
-        prob = judge.predict(X, num_threads=a.threads).astype(np.float32)
+        s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads, name_counts)
+        prob = judge.predict(X[feats], num_threads=a.threads).astype(np.float32)
         parts.append(pd.DataFrame({"s1_idx": s_idx.astype(np.int32), "rec_id": recs.entity_id.to_numpy()[r_idx],
                                    "prob": prob}))
         log(f"  chunk {i}: {len(recs):,} records -> {len(X):,} pairs ({len(X) / len(recs):.2f}/record)")
@@ -246,8 +259,9 @@ def cmd_dev(a):
     def keep_fn(s1):
         dev_ids = set(s1.entity_id[bucket(s1.entity_id, 10) == 0])
         holder["dev_ids"] = dev_ids
-        return set_keep(a, "dev", s1, owner, dev_ids)
+        return set_keep(a, "devfull" if a.dev_full else "dev", s1, owner, dev_ids)
     s1, pairs = scored(a, "train", keep_fn)
+    w_other = 1.0 if a.dev_full else DEV_OTHER_WEIGHT
     dev_ids = holder["dev_ids"]
     dev_idx = np.flatnonzero(s1.entity_id.isin(dev_ids).to_numpy())
     pos = pd.Series(np.arange(len(s1)), index=s1.entity_id)
@@ -259,14 +273,14 @@ def cmd_dev(a):
     dev_pairs = pairs[np.isin(pairs.s1_idx, dev_idx)]
     is_true = lambda d: np.fromiter((r in truth.get(s, ()) for s, r in zip(d.s1_idx, d.rec_id)), bool, len(d))
     kept = int(is_true(dev_pairs).sum())
-    cands = (dev_pairs.full.sum() + (~dev_pairs.full).sum() * DEV_OTHER_WEIGHT) / len(dev_idx)
+    cands = (dev_pairs.full.sum() + (~dev_pairs.full).sum() * w_other) / len(dev_idx)
     log(f"dev S1 {len(dev_idx):,} | true pairs {len(own):,} | reached the judge {kept / len(own):.4f} | "
         f"candidates per S1 {cands:.2f}")
     best = pairs.sort_values("prob", ascending=False).drop_duplicates("rec_id")
     best = best[np.isin(best.s1_idx, dev_idx)]
     country = s1.country.to_numpy()
     f = lambda d: dev_f05(d.s1_idx.to_numpy(), d.rec_id.to_numpy(), d.full.to_numpy(), truth, dev_idx, country,
-                          DEV_OTHER_WEIGHT)
+                          w_other)
     rows = []
     for t in a.thresholds:
         score, per_c, P, R = f(best[best.prob >= t])
@@ -292,29 +306,42 @@ def cmd_dev(a):
     log(f"threshold {t_best:.2f} saved to {a.model}.json; scored dev pairs -> {a.dev_pairs_out}")
 
 
-def cmd_test(a):
-    s1, pairs = scored(a, a.split, None)
-    t = a.threshold if a.threshold is not None else json.loads(Path(a.model + ".json").read_text())["threshold"]
+def write_outputs(s1_ids, pairs, t, out):
+    """pairs: [s1_idx, rec_id, prob] (all scored = the judge's input). Each record goes to its best S1 if prob >= t."""
     best = pairs.sort_values("prob", ascending=False).drop_duplicates("rec_id")
     best = best[best.prob >= t]
-    out = Path(a.out)
+    out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    ids = s1.entity_id.to_numpy()
     for fname, col, df in [("matching_results.tsv", "matched_entity_ids", best),
                            ("candidate_pairs.tsv", "candidate_entity_ids", pairs)]:
         lists = df.drop_duplicates(["s1_idx", "rec_id"]).groupby("s1_idx").rec_id.agg(",".join)
-        full = np.full(len(s1), "", dtype=object)
+        full = np.full(len(s1_ids), "", dtype=object)
         full[lists.index.to_numpy()] = lists.to_numpy()
         with open(out / fname, "w", encoding="utf-8") as fh:
             fh.write(f"source1_entity_id\t{col}\n")
-            for sid, lst in zip(ids, full):
+            for sid, lst in zip(s1_ids, full):
                 fh.write(f"{sid}\t{lst}\n")
     log(f"wrote {out}/: {len(best):,} matched records over {best.s1_idx.nunique():,} S1 (threshold {t:.2f}); "
-        f"candidates per S1 {len(pairs) / len(s1):.2f}")
+        f"candidates per S1 {len(pairs) / len(s1_ids):.2f}")
+
+
+def cmd_test(a):
+    s1, pairs = scored(a, a.split, None)
+    Path(a.out).mkdir(parents=True, exist_ok=True)
+    pairs.to_parquet(Path(a.out) / "test_pairs.parquet", index=False)   # threshold can change later without re-scoring
+    t = a.threshold if a.threshold is not None else json.loads(Path(a.model + ".json").read_text())["threshold"]
+    write_outputs(s1.entity_id.to_numpy(), pairs, t, a.out)
+
+
+def cmd_rethreshold(a):
+    """Rewrite the submission from saved test pairs with a new threshold (minutes, no re-scoring)."""
+    s1_ids = pd.read_parquet(f"{a.work}/{a.split}/source1.parquet", columns=["entity_id"]).entity_id.to_numpy()
+    pairs = pd.read_parquet(Path(a.out) / "test_pairs.parquet")
+    write_outputs(s1_ids, pairs, a.threshold, a.out)
 
 
 p = argparse.ArgumentParser()
-p.add_argument("cmd", choices=["rank_train", "rank_eval", "train", "dev", "test"])
+p.add_argument("cmd", choices=["rank_train", "rank_eval", "train", "dev", "test", "rethreshold"])
 p.add_argument("--work", default="work")
 p.add_argument("--rank-model", default="models/rank_v2.txt")
 p.add_argument("--model", default="models/judge_v2.txt")
@@ -326,6 +353,8 @@ p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.
 p.add_argument("--tol", type=float, default=0.001, help="max F0.5-ceiling loss accepted to shrink the candidate set")
 p.add_argument("--threads", type=int, default=4)
 p.add_argument("--sample", type=float, default=None)
+p.add_argument("--dev-full", action="store_true", help="dev scores ALL records (exact, no distractor scaling; slow)")
+p.add_argument("--features", default="ambig", choices=list(J_SETS), help="judge feature set (A/B)")
 a = p.parse_args()
 {"rank_train": cmd_rank_train, "rank_eval": cmd_rank_eval, "train": cmd_train, "dev": cmd_dev,
- "test": cmd_test}[a.cmd](a)
+ "test": cmd_test, "rethreshold": cmd_rethreshold}[a.cmd](a)

@@ -3,8 +3,8 @@ stage-1 (ranker) features. judge_v1.py keeps its own copies so upload #2 stays r
 
 Record sets are fixed, disjoint hash buckets of the record id (crc32 % 100), so no record is ever in two sets:
   rank  : 0-3    stage-1 ranker training      (records owned by dev S1 excluded)
-  judge : 4-18   stage-2 judge training       (records owned by dev S1 excluded)
-  dev   : records owned by dev S1 (all) + distractors from buckets 19-28 (10%, weighted x10 in scoring)
+  judge : 4-43   stage-2 judge training (40%) (records owned by dev S1 excluded)
+  dev   : records owned by dev S1 (all) + distractors from buckets 90-99 (10%, weighted x10 in scoring)
 Dev S1 = crc32(S1 id) % 10 == 0.
 """
 import resource
@@ -18,6 +18,8 @@ from rapidfuzz import fuzz, process
 
 from amlc.blocking import Blocker
 from amlc.keys import KEY_TYPES, filter_s1_keys, join_keys, row_keys, token_df
+from amlc.norm import _fold_token
+from amlc.segment import Segmenter
 
 COLS = ["entity_id", "country", "nums", "n_core", "n_key", "n_fold", "n_flat", "n_suffix", "n_alias", "n_is_domain",
         "a_house", "a_house_alts", "a_street", "a_city", "a_state", "a_tokens", "a_has_addr"]
@@ -27,7 +29,7 @@ TF_PASSES = {
 }
 TF_K = {"tf_name": 10, "tf_mix": 20}
 TF = list(TF_PASSES)
-RANK_SET, JUDGE_SET, DEV_OTHER = (0, 4), (4, 19), (19, 29)
+RANK_SET, JUDGE_SET, DEV_OTHER = (0, 4), (4, 44), (90, 100)
 DEV_OTHER_WEIGHT = 100 / (DEV_OTHER[1] - DEV_OTHER[0])
 T0 = time.time()
 
@@ -57,14 +59,34 @@ def load_owner(work):
     return pd.Series(ex.source1_entity_id.to_numpy(), index=ex.r.to_numpy())
 
 
-def iter_records(work, split, keep=None, batch=300_000):
+def make_segmenter(s1):
+    """Word splitter for domain/handle names, from the split's own S1 name words (provided data)."""
+    import collections
+    return Segmenter(collections.Counter(w for x in s1.n_core for w in x.split()))
+
+
+def apply_segmentation(df, seg):
+    """Domain/handle names ('producernavimumbai.com') -> words, then rebuild the name fields from them."""
+    m = (df.n_is_domain == 1).to_numpy()
+    if seg is None or not m.any():
+        return df
+    words = [seg(x).split() for x in df.n_flat.to_numpy()[m]]
+    df.loc[m, "n_core"] = [" ".join(w) for w in words]
+    df.loc[m, "n_key"] = [" ".join(sorted(set(w))) for w in words]
+    df.loc[m, "n_fold"] = [" ".join(sorted({_fold_token(t) for t in w})) for w in words]
+    return df
+
+
+def iter_records(work, split, keep=None, batch=300_000, seg=None):
     for s in (2, 3):
         for b in pq.ParquetFile(f"{work}/{split}/source{s}.parquet").iter_batches(batch, columns=COLS):
             df = b.to_pandas()
             if keep is not None:
                 df = df[keep(df)].reset_index(drop=True)
             if len(df):
+                df = apply_segmentation(df, seg)
                 df["mix"] = df.n_core + " " + df.a_tokens
+                df["src3"] = np.int8(s == 3)
                 yield df
 
 
@@ -117,7 +139,8 @@ class Shortlister:
 
 RANK_FEATURES = ([f"k_{k}" for k in KEY_TYPES] + [f"{t}_{s}" for t in TF for s in ("score", "rank")] +
                  ["n_keys", "n_cands", "tf_best", "tf_best_gap", "mix_gap", "nm_tset", "ad_tset", "nm_tset_gap",
-                  "ad_tset_gap", "house_eq", "street_eq", "city_eq", "state_state", "rec_has_addr", "s1_has_addr"])
+                  "ad_tset_gap", "house_eq", "street_eq", "city_eq", "state_state", "rec_has_addr", "s1_has_addr",
+                  "src3"])
 
 
 def rank_features(s1, recs, f, threads=4):
@@ -146,6 +169,7 @@ def rank_features(s1, recs, f, threads=4):
     X["state_state"] = np.where((sst == "") | (rst == ""), 2, np.where(sst == rst, 1, 3)).astype(np.int8)
     X["rec_has_addr"] = g(recs, "a_has_addr", ri).astype(np.int8)
     X["s1_has_addr"] = g(s1, "a_has_addr", si).astype(np.int8)
+    X["src3"] = g(recs, "src3", ri).astype(np.int8) if "src3" in recs else np.int8(0)
     return X[RANK_FEATURES]
 
 

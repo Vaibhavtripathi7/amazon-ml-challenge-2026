@@ -52,3 +52,11 @@ def test_record_sets_are_disjoint():
     assert not (sets["rank"] & sets["judge"]).any() and not (sets["rank"] & sets["dev"]).any()
     assert not (sets["judge"] & sets["dev"]).any()
     assert sets["dev"][:10].all() and not sets["rank"][:10].any()   # dev-owned records only in dev
+
+
+def test_domain_records_get_segmented_name_fields():
+    from amlc.stage import apply_segmentation, make_segmenter
+    s1 = frame([["S1-a", "US", "Navi Mumbai Producer Ltd", "4 Shop Road, Thane, MH"]] * 3)
+    recs = frame([["S3-z", "US", "producernavimumbai.com", "Shop No. 4, Thane, MH"]])
+    out = apply_segmentation(recs.copy(), make_segmenter(s1))
+    assert out.n_core[0] == "producer navi mumbai" and out.n_key[0] == "mumbai navi producer"

@@ -21,9 +21,9 @@ import pandas as pd
 from amlc.judge_features import FEATURES, Context, pair_features
 from amlc.metric import dev_f05
 from amlc.stage import (DEV_OTHER_WEIGHT, RANK_FEATURES, Shortlister, bucket, iter_records, load_owner, load_s1, log,
-                        rank_features, record_set, top_n)
+                        make_segmenter, rank_features, record_set, top_n)
 
-J_FEATURES = FEATURES + ["s1_prob", "s1_rank"]
+J_FEATURES = FEATURES + ["s1_prob", "s1_rank", "src3"]
 V1_RULE = "v1_rule"
 
 
@@ -62,7 +62,7 @@ def cmd_rank_train(a):
     s1_ids = s1.entity_id.to_numpy()
     Xs, ys, gids, owned_rec = [], [], [], []
     offset = 0
-    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "rank", s1, owner, dev_ids))):
+    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "rank", s1, owner, dev_ids), seg=make_segmenter(s1))):
         f = sl(recs)
         X = rank_features(s1, recs, f, a.threads)
         own = owner.reindex(recs.entity_id.to_numpy()).to_numpy()
@@ -133,7 +133,7 @@ def cmd_rank_eval(a):
     own_dev = owner[owner.isin(dev_ids)]
     log(f"rank_eval ({models['kind']}): dev S1 {len(dev_idx):,}, true pairs {len(own_dev):,}")
     rows = []
-    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "dev", s1, owner, dev_ids))):
+    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "dev", s1, owner, dev_ids), seg=make_segmenter(s1))):
         f = sl(recs)
         X = rank_features(s1, recs, f, a.threads)
         sc = ranker_score(models, X)
@@ -185,6 +185,7 @@ def stage12(sl, ctx, s1, recs, models, op, threads):
     flags = f.assign(tf_addr_score=np.float32(0), tf_addr_rank=np.int8(10))
     X = pair_features(ctx, recs, s_idx, r_idx, flags, threads)
     X["s1_prob"], X["s1_rank"] = sc[keep].astype(np.float32), rank[keep]
+    X["src3"] = recs.src3.to_numpy()[r_idx].astype(np.int8)
     return s_idx, r_idx, X[J_FEATURES]
 
 
@@ -196,7 +197,7 @@ def cmd_train(a):
     s1_ids = s1.entity_id.to_numpy()
     Xs, ys, grp = [], [], []
     owned_n = kept_n = 0
-    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "judge", s1, owner, dev_ids))):
+    for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "judge", s1, owner, dev_ids), seg=make_segmenter(s1))):
         s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads)
         own = owner.reindex(recs.entity_id.to_numpy()).to_numpy()
         y = (own[r_idx] == s1_ids[s_idx]).astype(np.int8)
@@ -229,7 +230,7 @@ def scored(a, split, keep_fn):
     log(f"{split}: S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']}")
     parts = []
     keep = keep_fn(s1) if keep_fn else None
-    for i, recs in enumerate(iter_records(a.work, split, keep)):
+    for i, recs in enumerate(iter_records(a.work, split, keep, seg=make_segmenter(s1))):
         s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads)
         prob = judge.predict(X, num_threads=a.threads).astype(np.float32)
         parts.append(pd.DataFrame({"s1_idx": s_idx.astype(np.int32), "rec_id": recs.entity_id.to_numpy()[r_idx],

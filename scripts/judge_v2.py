@@ -287,7 +287,14 @@ def cmd_dev(a):
         rows.append((t, score))
         print(f"  t={t:.2f}  dev F0.5 {score:.4f}  precision {P:.4f}  recall {R:.4f}  by country {per_c}", flush=True)
     t_best = max(rows, key=lambda r: r[1])[0]
-    Path(a.model + ".json").write_text(json.dumps({"threshold": t_best}))
+    per_c = {}
+    for c in sorted(set(country[dev_idx])):
+        m = country[best.s1_idx.to_numpy()] == c
+        grid = [(t, f(best[m & (best.prob >= t).to_numpy()])[1].get(c, 0.0)) for t in a.thresholds]
+        per_c[c] = max(grid, key=lambda g: g[1])
+    print("best threshold per country: " + ", ".join(f"{c} t={t:.2f} F0.5 {v:.4f}" for c, (t, v) in per_c.items()))
+    Path(a.model + ".json").write_text(json.dumps({"threshold": t_best,
+                                                   "by_country": {c: t for c, (t, _) in per_c.items()}}))
     oracle = dev_pairs[is_true(dev_pairs)].drop_duplicates("rec_id")
     chosen = best[best.prob >= t_best]
     no_fp = chosen[is_true(chosen)]
@@ -306,10 +313,15 @@ def cmd_dev(a):
     log(f"threshold {t_best:.2f} saved to {a.model}.json; scored dev pairs -> {a.dev_pairs_out}")
 
 
-def write_outputs(s1_ids, pairs, t, out):
-    """pairs: [s1_idx, rec_id, prob] (all scored = the judge's input). Each record goes to its best S1 if prob >= t."""
+def write_outputs(s1_ids, pairs, t, out, country=None):
+    """pairs: [s1_idx, rec_id, prob] (all scored = the judge's input). Each record goes to its best S1 if prob >= t.
+    t is a number, or {country: threshold} (then `country` = array of S1 countries aligned with s1_ids)."""
     best = pairs.sort_values("prob", ascending=False).drop_duplicates("rec_id")
-    best = best[best.prob >= t]
+    if isinstance(t, dict):
+        tt = pd.Series(country[best.s1_idx.to_numpy()]).map(t).fillna(t.get("default", 0.5)).to_numpy()
+        best = best[best.prob.to_numpy() >= tt]
+    else:
+        best = best[best.prob >= t]
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     for fname, col, df in [("matching_results.tsv", "matched_entity_ids", best),
@@ -321,7 +333,7 @@ def write_outputs(s1_ids, pairs, t, out):
             fh.write(f"source1_entity_id\t{col}\n")
             for sid, lst in zip(s1_ids, full):
                 fh.write(f"{sid}\t{lst}\n")
-    log(f"wrote {out}/: {len(best):,} matched records over {best.s1_idx.nunique():,} S1 (threshold {t:.2f}); "
+    log(f"wrote {out}/: {len(best):,} matched records over {best.s1_idx.nunique():,} S1 (threshold {t}); "
         f"candidates per S1 {len(pairs) / len(s1_ids):.2f}")
 
 
@@ -330,14 +342,16 @@ def cmd_test(a):
     Path(a.out).mkdir(parents=True, exist_ok=True)
     pairs.to_parquet(Path(a.out) / "test_pairs.parquet", index=False)   # threshold can change later without re-scoring
     t = a.threshold if a.threshold is not None else json.loads(Path(a.model + ".json").read_text())["threshold"]
-    write_outputs(s1.entity_id.to_numpy(), pairs, t, a.out)
+    write_outputs(s1.entity_id.to_numpy(), pairs, t, a.out, s1.country.to_numpy())
 
 
 def cmd_rethreshold(a):
-    """Rewrite the submission from saved test pairs with a new threshold (minutes, no re-scoring)."""
-    s1_ids = pd.read_parquet(f"{a.work}/{a.split}/source1.parquet", columns=["entity_id"]).entity_id.to_numpy()
-    pairs = pd.read_parquet(Path(a.out) / "test_pairs.parquet")
-    write_outputs(s1_ids, pairs, a.threshold, a.out)
+    """Rewrite the submission from saved test pairs with a new threshold (minutes, no re-scoring).
+    --threshold 0.6, or --by-country India=0.7 US=0.5 France=0.6 default=0.6"""
+    s1 = pd.read_parquet(f"{a.work}/{a.split}/source1.parquet", columns=["entity_id", "country"])
+    pairs = pd.read_parquet(Path(a.pairs_in or Path(a.out) / "test_pairs.parquet"))
+    t = {k: float(v) for k, v in (x.split("=") for x in a.by_country)} if a.by_country else a.threshold
+    write_outputs(s1.entity_id.to_numpy(), pairs, t, a.out, s1.country.to_numpy())
 
 
 p = argparse.ArgumentParser()
@@ -349,6 +363,8 @@ p.add_argument("--out", default="output")
 p.add_argument("--dev-pairs-out", default="dev_pairs_v2.parquet")
 p.add_argument("--split", default="test")
 p.add_argument("--threshold", type=float, default=None)
+p.add_argument("--by-country", nargs="+", default=None, help="rethreshold: India=0.7 US=0.5 France=0.6 default=0.6")
+p.add_argument("--pairs-in", default=None, help="rethreshold: scored test pairs (default <out>/test_pairs.parquet)")
 p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
 p.add_argument("--tol", type=float, default=0.001, help="max F0.5-ceiling loss accepted to shrink the candidate set")
 p.add_argument("--threads", type=int, default=4)

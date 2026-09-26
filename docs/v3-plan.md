@@ -86,3 +86,14 @@ Every step: build → local mini-world run → fresh-clone check → Kaggle run 
 - [Hybrid Approach to English–Hindi Name Entity Transliteration](https://arxiv.org/pdf/1403.7455)
 - [wordninja (unigram DP word segmentation)](https://github.com/keredson/wordninja)
 - [Collective Entity Resolution in Relational Data (Bhattacharya & Getoor)](https://linqs.org/assets/resources/bhattacharya-tkdd07.pdf)
+
+## Experiment log
+
+| Date | Experiment (our data) | Result | Decision |
+| --- | --- | --- | --- |
+| 2026-09-26 | India word dictionary, held-out dev pairs (20k script-name records) | S1 name words recovered 0.125 → 0.791; name-key equal 0.012 → 0.652 | Keep (v3 step 1) |
+| 2026-09-26 | Domain segmentation, dev domain/handle records (42,343) | Name words recovered 0.029 → 0.825 | Keep (v3 step 2) |
+| 2026-09-26 | Collective "namesake without same-source record" rule, oracle on 337k no-address records | Owner uniquely identified in only about 19% of ambiguous cases | **Rejected** (step 4 not built) |
+| 2026-09-26 | Sampled vs exact dev (mini world) | Sampled overestimates (0.9965 vs 0.9942 at its own threshold) and picks too low a threshold (0.2 vs 0.3–0.6) | Use exact dev (`--dev-full`) for the final threshold |
+| 2026-09-26 | Per-S1 expected-F0.5 decision vs global threshold (mini, exact dev) | 0.9946 vs 0.9958 | Not adopted (needs calibrated probabilities) |
+| 2026-09-26 | Ambiguity features A/B, 5% world (110k S1, all records), exact dev | base 0.9906 → ambig **0.9916**; paired bootstrap diff +0.0010, 95% CI [+0.0003, +0.0017] | **Keep** (default `--features ambig`) |

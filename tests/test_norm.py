@@ -104,3 +104,17 @@ def test_france_rue_and_numero():
     assert a["house"] == "16" and a["street_type"] == "rue" and a["street"] == "matte"
     b = parse_address("16 Rue de la Matte, Saint-Nazaire, Pays de la Loire", "France")
     assert b["street"] == "matte" and b["city"] == a["city"] == "saint nazaire"
+
+
+# ---------- Indian-script words mapped to English (learned dictionary, resources/in_xlit.json)
+def test_native_script_name_becomes_english_words():
+    from amlc.norm import XLIT
+    if not XLIT["name"]:
+        return   # dictionary not built in this checkout
+    n = parse_name("शक्ति अर्बन प्रोडक्ट्स प्राइवेट लिमिटेड")
+    assert n["core"] == "shakti urban products" and set(n["suffix"].split()) == {"pvt", "ltd"}
+    assert parse_name("जैन वेंचर्स प्राइवेट लिमिटेड")["key"] == parse_name("Jain Ventures Private Limited")["key"]
+
+
+def test_latin_words_are_never_remapped():
+    assert parse_name("Al Noor Traders")["core"] == "al noor traders"

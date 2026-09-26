@@ -45,12 +45,31 @@ def _fold_token(t):
 _FOLDED_SUFFIX = {_fold_token(k): v for k, v in SUFFIX_CANON.items()}
 
 
-def _ascii(s):
-    return anyascii(s or "").lower()
+# Indian-script word -> English word, learned from non-dev train pairs (scripts/build_xlit_dict.py)
+_XLIT_RES = Path(__file__).parent / "resources" / "in_xlit.json"
+XLIT = json.loads(_XLIT_RES.read_text()) if _XLIT_RES.exists() else {"name": {}, "addr": {}}
+_NATIVE_WORD = re.compile(r"[^\s,]*[\u0900-\u0DFF][^\s,]*")   # words containing Indian-script characters
+
+
+def _xlit(s, kind):
+    """Replace native-script words by their learned English word (unknown words: plain transliteration)."""
+    table = XLIT.get(kind, {})
+
+    def one(m):
+        toks = re.sub(r"[^a-z0-9]+", " ", anyascii(m.group(0)).lower()).split()
+        return " ".join(table.get(t, t) for t in toks)
+    return _NATIVE_WORD.sub(one, s) if table else s
+
+
+def _ascii(s, kind=None):
+    s = s or ""
+    if kind and re.search(r"[\u0900-\u0DFF]", s):
+        s = _xlit(s, kind)
+    return anyascii(s).lower()
 
 
 def parse_name(raw):
-    s = _ascii(raw)
+    s = _ascii(raw, "name")
     s = s.split("|")[0]                              # 'Name | www.site.com' -> 'Name'
     s = _ID.sub(" ", s)
     s = re.sub(r"\bm\s*/\s*s\b", " ", s)             # M/s
@@ -203,7 +222,7 @@ def _state(comp, country):
 
 
 def parse_address(raw, country):
-    s = _NULL.sub(" ", _ascii(raw))
+    s = _NULL.sub(" ", _ascii(raw, "addr"))
     s = re.sub(r"\bn\s*(?:°|deg)", " no ", s).replace("#", " ").replace("'", " ")   # N° (anyascii: 'ndeg')
     s = re.sub(r"(?<=[a-z])\.(?=[a-z\s]|$)", " ", s)            # 'h.no' -> 'h no', 'st.' -> 'st'
     s = re.sub(r"\b(?:h|s|d)\s+no\b", " no ", s)                 # H.NO / S.No / D.No prefixes

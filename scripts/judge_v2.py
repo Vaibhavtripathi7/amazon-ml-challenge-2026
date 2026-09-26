@@ -118,10 +118,14 @@ def cmd_rank_train(a):
             rec.append(len(np.unique(gv[keep & (yv == 1)])) / max(n_owned, 1))
         results[kind] = rec
         print(f"  {kind:12s} " + " ".join(f"{r:.4f} " for r in rec))
-    best = max(["binary", "lambdarank"], key=lambda k: (results[k][1], results[k][0]))   # recall@2, then @1
+    # default "binary": calibrated probabilities allow a probability cut, which gives the best recall at a SMALL
+    # candidate set (5% world: binary top-10 + p>=0.001 -> recall 0.9928 at 4.0 cands/S1, vs lambdarank top-2 0.9895
+    # at 6.9). "auto" = the old rule (recall@2, then @1).
+    best = (max(["binary", "lambdarank"], key=lambda k: (results[k][1], results[k][0])) if a.rank_objective == "auto"
+            else a.rank_objective)
     Path(a.rank_model + ".json").write_text(json.dumps({"objective": best}))
     imp = pd.Series(mb.feature_importance("gain"), RANK_FEATURES).sort_values(ascending=False)
-    log(f"chosen objective: {best} (by recall@2); binary top features "
+    log(f"chosen objective: {best} (--rank-objective {a.rank_objective}); binary top features "
         f"{(imp / imp.sum()).head(8).round(3).to_dict()}")
 
 
@@ -154,22 +158,24 @@ def cmd_rank_eval(a):
     for r, s in zip(own_dev.index, pos[own_dev.to_numpy()].to_numpy()):
         truth[s].add(r)
     country = s1.country.to_numpy()
-    mps = [0.0] if models["kind"] != "binary" else [0.0, 0.001, 0.003, 0.01, 0.03, 0.1]
+    # min_prob is a probability cut: only meaningful for the binary ranker. LambdaRank scores are unbounded and can be
+    # negative, so they get no cut (a ">= 0" cut silently dropped every negative-scored candidate: fixed 2026-09-26).
+    mps = [None] if models["kind"] != "binary" else [0.0, 0.001, 0.003, 0.01, 0.03, 0.1]
     grid = []
     print(f"\n{'top-N':>5s} {'min_p':>6s} {'recall':>7s} {'cands/S1':>8s} {'F0.5 ceiling':>12s}")
     for n in (1, 2, 3, 5, 10):
         for mp in mps:
-            k = P[(P["rank"] < n) & (P.prob >= mp)]
+            k = P[(P["rank"] < n) & ((P.prob >= mp) if mp is not None else True)]
             t = k[k.is_true]
             ceiling = dev_f05(t.s1_idx.to_numpy(), t.rec_id.to_numpy(), t.full.to_numpy(), truth, dev_idx, country,
                               DEV_OTHER_WEIGHT)[0]
             cands = (k.full.sum() + (~k.full).sum() * DEV_OTHER_WEIGHT) / len(dev_idx)
             grid.append((n, mp, len(t) / len(own_dev), cands, ceiling))
-            print(f"{n:5d} {mp:6.3f} {grid[-1][2]:7.4f} {cands:8.2f} {ceiling:12.4f}", flush=True)
+            print(f"{n:5d} {mp if mp is not None else '-':>6} {grid[-1][2]:7.4f} {cands:8.2f} {ceiling:12.4f}", flush=True)
     best_c = max(g[4] for g in grid)
     ok = [g for g in grid if g[4] >= best_c - a.tol]
     n, mp, r, c, ce = min(ok, key=lambda g: g[3])
-    op.update(top_n=n, min_prob=mp)
+    op.update(top_n=n, min_prob=mp if mp is not None else None)
     Path(a.rank_model + ".json").write_text(json.dumps(op))
     log(f"chosen operating point: top-{n}, min_prob {mp} -> recall {r:.4f}, {c:.2f} candidates/S1, "
         f"ceiling {ce:.4f} (best ceiling {best_c:.4f}, tol {a.tol})")
@@ -184,7 +190,8 @@ def stage12(sl, ctx, s1, recs, models, op, threads, name_counts):
     sc = ranker_score(models, X1)
     amb = ambiguity_features(f, sc, recs, s1, name_counts)
     keep, rank = top_n(f.rec_idx.to_numpy(), sc, op["top_n"])
-    keep &= sc >= op.get("min_prob", 0.0)
+    if models["kind"] == "binary" and op.get("min_prob") is not None:   # probability cut: binary ranker only
+        keep &= sc >= op["min_prob"]
     f = f[keep].reset_index(drop=True)
     s_idx, r_idx = f.s1_idx.to_numpy(), f.rec_idx.to_numpy()
     flags = f.assign(tf_addr_score=np.float32(0), tf_addr_rank=np.int8(10))
@@ -367,6 +374,7 @@ p.add_argument("--by-country", nargs="+", default=None, help="rethreshold: India
 p.add_argument("--pairs-in", default=None, help="rethreshold: scored test pairs (default <out>/test_pairs.parquet)")
 p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
 p.add_argument("--tol", type=float, default=0.001, help="max F0.5-ceiling loss accepted to shrink the candidate set")
+p.add_argument("--rank-objective", default="binary", choices=["binary", "lambdarank", "auto"])
 p.add_argument("--threads", type=int, default=4)
 p.add_argument("--sample", type=float, default=None)
 p.add_argument("--dev-full", action="store_true", help="dev scores ALL records (exact, no distractor scaling; slow)")

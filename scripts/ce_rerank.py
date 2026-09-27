@@ -116,6 +116,8 @@ def load_model(a, n_train=None):
         model = AutoModelForSequenceClassification.from_config(cfg)
     elif Path(a.model_dir, "config.json").exists() and n_train is None:
         model = AutoModelForSequenceClassification.from_pretrained(a.model_dir, num_labels=1)
+    elif a.init and n_train is not None:                            # continue training an already fine-tuned model
+        model = AutoModelForSequenceClassification.from_pretrained(a.init, num_labels=1)
     else:
         model = AutoModelForSequenceClassification.from_pretrained(a.base, num_labels=1)
     if n_train is None and a.tiny and Path(a.model_dir, "model.pt").exists():
@@ -143,7 +145,7 @@ def cmd_train(a):
         P = P[P.country.isin(a.train_countries)]
     P = P.sample(frac=1.0, random_state=0).head(a.max_pairs).reset_index(drop=True)
     tok, model, dev = load_model(a, n_train=len(P))
-    log(f"train pairs {len(P):,} (positives {int(P.is_true.sum()):,}) on {dev}; base {a.base}")
+    log(f"train pairs {len(P):,} (positives {int(P.is_true.sum()):,}) on {dev}; start from {a.init or a.base}")
     A, B, y = P.text_s1.tolist(), P.text_rec.tolist(), torch.tensor(P.is_true.to_numpy(), dtype=torch.float32)
     steps = math.ceil(len(P) / a.bs) * a.epochs
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
@@ -443,6 +445,7 @@ def main():
     p.add_argument("--in", dest="inp")
     p.add_argument("--model-dir", default="ce/model")
     p.add_argument("--base", default="xlm-roberta-base")
+    p.add_argument("--init", default=None, help="train: start from this fine-tuned model dir instead of --base")
     p.add_argument("--tiny", action="store_true", help="smoke test with a tiny random model")
     p.add_argument("--train-countries", nargs="+", default=None, help="train only on these (unseen-country rehearsal)")
     p.add_argument("--test-pairs")

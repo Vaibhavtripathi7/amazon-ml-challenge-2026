@@ -26,11 +26,14 @@ import time
 import zlib
 from pathlib import Path
 
+import sys
+
 import numpy as np
 import pandas as pd
 
-from amlc.metric import f05
-from amlc.norm import parse_address
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))   # works without `pip install -e .`
+from amlc.metric import f05  # noqa: E402
+from amlc.norm import parse_address  # noqa: E402
 
 T0 = time.time()
 W_OTHER = 10.0   # weight of a wrong merge of a sampled distractor record (judge_v2 dev sampling); 1.0 for --dev-full pairs

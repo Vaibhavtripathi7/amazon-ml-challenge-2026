@@ -337,10 +337,25 @@ def cmd_check(a):
         truth = truth[truth.s1.isin(set(V.s1_id))]
     half = np.array([h(s, "|half", 2) for s in truth.s1])
     grid = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+    cols = ["prob", "ce", "blend"]
+    if a.bands:   # footprint sweep (needs CE scores on all pairs: eval --all-pairs): re-fit the blend inside each band
+        from sklearn.linear_model import LogisticRegression
+        fold2 = np.array([h(s, "|blend", 2) for s in V.s1_id])
+        for bd in a.bands:
+            lo, hi = map(float, bd.split(","))
+            band = ((V.prob >= lo) & (V.prob <= hi)).to_numpy()
+            col = f"band[{lo},{hi}] {band.mean():.3f}"
+            V[col] = V.prob.astype(np.float64)
+            for f in (0, 1):
+                tr, te = band & (fold2 != f), band & (fold2 == f)
+                lr = LogisticRegression(C=1.0).fit(np.c_[logit(V.prob[tr]), logit(V.ce[tr])], V.is_true[tr])
+                w = np.array([lr.intercept_[0], lr.coef_[0][0], lr.coef_[0][1]])
+                V.loc[te, col] = blend_prob(w, V.prob[te].to_numpy(), V.ce[te].to_numpy())
+            cols.append(col)
     rng = np.random.default_rng(0)
     for c in sorted(truth.country.dropna().unique()):
         out = {}
-        for col in ("prob", "ce", "blend"):
+        for col in cols:
             scores = []
             for f in (0, 1):
                 tA, tB = truth[(truth.country == c).to_numpy() & (half == f)], truth[(truth.country == c).to_numpy() & (half != f)]
@@ -348,7 +363,7 @@ def cmd_check(a):
                 scores.append(per_s1(V, tB, col, {c: t}))
             out[col] = pd.concat(scores)
         line = f"  {c:6s} out-of-fold F0.5: judge {out['prob'].mean():.4f} | CE {out['ce'].mean():.4f} | blend {out['blend'].mean():.4f}"
-        for col in ("ce", "blend"):
+        for col in cols[1:]:
             d = (out[col] - out["prob"].reindex(out[col].index)).to_numpy()
             bs = [d[rng.integers(0, len(d), len(d))].mean() for _ in range(1000)]
             line += f" | {col}-judge {d.mean():+.4f} [{np.percentile(bs, 2.5):+.4f}, {np.percentile(bs, 97.5):+.4f}]"
@@ -362,8 +377,9 @@ def cmd_apply(a):
     T["s1_id"] = s1.entity_id.to_numpy()[T.s1_idx.to_numpy()]
     T["country"] = s1.country.to_numpy()[T.s1_idx.to_numpy()]
     cfg = json.load(open(Path(a.model_dir, f"blend{a.tag}.json")))
-    sel = (np.ones(len(T), bool) if cfg.get("all_pairs") else ((T.prob >= a.lo) & (T.prob <= a.hi))) | T.country.isin(a.unseen or [])
-    log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{a.lo}, {a.hi}] + unseen {a.unseen})")
+    lo, hi = (0.0, 1.0) if cfg.get("all_pairs") else (cfg["lo"], cfg["hi"])   # the band the blend was fitted on
+    sel = ((T.prob >= lo) & (T.prob <= hi)) | T.country.isin(a.unseen or [])
+    log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{lo}, {hi}] from blend{a.tag}.json + unseen {a.unseen})")
     Path(a.out, "chunks").mkdir(parents=True, exist_ok=True)
     sub = T[sel]
     rows = np.flatnonzero(sel.to_numpy())
@@ -435,6 +451,7 @@ def main():
     p.add_argument("--ckpt-every", type=int, default=1500, help="train: checkpoint to --model-dir every N steps")
     p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
+    p.add_argument("--bands", nargs="+", default=None, help='check: footprints to compare, e.g. 0.01,0.99 0.001,0.999 0,1')
     p.add_argument("--tag", default="", help="eval/check/apply: suffix for blend/val_scored files (compare variants)")
     p.add_argument("--truth-in-pairs", action="store_true", help="eval on a test slice: only S1 present in the pairs")
     p.add_argument("--w-other", type=float, default=10.0, help="eval: 10 for sampled dev pairs, 1 for --dev-full pairs")

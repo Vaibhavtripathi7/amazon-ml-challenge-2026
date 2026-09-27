@@ -378,7 +378,7 @@ def cmd_apply(a):
     T["country"] = s1.country.to_numpy()[T.s1_idx.to_numpy()]
     cfg = json.load(open(Path(a.model_dir, f"blend{a.tag}.json")))
     lo, hi = (0.0, 1.0) if cfg.get("all_pairs") else (cfg["lo"], cfg["hi"])   # the band the blend was fitted on
-    sel = ((T.prob >= lo) & (T.prob <= hi)) | T.country.isin(a.unseen or [])
+    sel = ((T.prob >= lo) & (T.prob <= hi)) | (T.country.isin(a.unseen or []) & (not a.unseen_band_only))
     log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{lo}, {hi}] from blend{a.tag}.json + unseen {a.unseen})")
     Path(a.out, "chunks").mkdir(parents=True, exist_ok=True)
     sub = T[sel]
@@ -462,6 +462,8 @@ def main():
     p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
     p.add_argument("--bands", nargs="+", default=None, help='check: footprints to compare, e.g. 0.01,0.99 0.001,0.999 0,1')
+    p.add_argument("--unseen-band-only", action="store_true",
+                   help="apply: re-score unseen-country pairs only inside the band (not all of them)")
     p.add_argument("--unseen-blend", default=None, help="apply: blend.json fitted in the unseen-country rehearsal")
     p.add_argument("--tag", default="", help="eval/check/apply: suffix for blend/val_scored files (compare variants)")
     p.add_argument("--truth-in-pairs", action="store_true", help="eval on a test slice: only S1 present in the pairs")

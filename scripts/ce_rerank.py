@@ -71,6 +71,9 @@ def h(x, salt, m):
 
 # ------------------------------------------------------------------ build
 def cmd_build(a):
+    if Path(a.out).exists() and Path(a.out).with_name("val_truth.parquet").exists():
+        log(f"{a.out} already built — skipping")
+        return
     P = pd.read_parquet(a.pairs)
     P = P[P.is_dev_s1].reset_index(drop=True)                       # labels are exact only for dev S1
     P["fold"] = np.where([h(s, "|ce", 5) == 0 for s in P.s1_id], "val", "train")
@@ -122,6 +125,9 @@ def batches(tok, A, B, bs, max_len, order=None):
 
 def cmd_train(a):
     import torch
+    if Path(a.model_dir, "TRAIN_DONE").exists():
+        log(f"{a.model_dir}: already trained (TRAIN_DONE) — skipping")
+        return
     P = pd.read_parquet(a.inp)
     P = P[P.fold == "train"]
     if a.train_countries:
@@ -136,11 +142,23 @@ def cmd_train(a):
                                               * max(0.0, (steps - s) / steps))
     scaler = torch.amp.GradScaler("cuda", enabled=dev == "cuda")
     lossf = torch.nn.BCEWithLogitsLoss()
-    model.train()
+    Path(a.model_dir).mkdir(parents=True, exist_ok=True)
+    ckpt = Path(a.model_dir, "ckpt.pt")
     step = 0
+    if ckpt.exists():                                               # resume after a disconnect
+        st = torch.load(ckpt, map_location=dev, weights_only=False)
+        model.load_state_dict(st["model"]); opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"]); scaler.load_state_dict(st["scaler"])
+        step = st["step"]
+        log(f"resumed from checkpoint at step {step}/{steps}")
+    model.train()
+    per_epoch = math.ceil(len(P) / a.bs)
     for ep in range(a.epochs):
         order = np.random.default_rng(ep).permutation(len(P))
-        for j, enc in batches(tok, A, B, a.bs, a.max_len, order):
+        skip = max(0, step - ep * per_epoch) * a.bs                  # batches already done in this epoch
+        if skip >= len(P):
+            continue
+        for j, enc in batches(tok, A, B, a.bs, a.max_len, order[skip:]):
             enc = {k: v.to(dev) for k, v in enc.items()}
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
                 out = model(**enc).logits.squeeze(-1)
@@ -155,12 +173,22 @@ def cmd_train(a):
             step += 1
             if step % 200 == 0 or step == steps:
                 log(f"  epoch {ep} step {step}/{steps} loss {loss.item():.4f}")
-    Path(a.model_dir).mkdir(parents=True, exist_ok=True)
+            if step % a.ckpt_every == 0 and step < steps:
+                tmp = ckpt.with_suffix(".tmp")
+                torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                            "scaler": scaler.state_dict(), "step": step}, tmp)
+                tmp.replace(ckpt)                                   # atomic: a half-written checkpoint never wins
+                log(f"  checkpoint saved at step {step}")
+            if a.stop_after_steps and step >= a.stop_after_steps:  # test hook: simulate a disconnect
+                log("stopping early (test hook)")
+                return
     if a.tiny:
         torch.save(model.state_dict(), Path(a.model_dir, "model.pt"))
     else:
         model.save_pretrained(a.model_dir)
     tok.save_pretrained(a.model_dir)
+    Path(a.model_dir, "TRAIN_DONE").touch()
+    ckpt.unlink(missing_ok=True)
     log(f"model saved to {a.model_dir}")
 
 
@@ -265,17 +293,30 @@ def cmd_apply(a):
     cfg = json.load(open(Path(a.model_dir, "blend.json")))
     sel = ((T.prob >= a.lo) & (T.prob <= a.hi)) | T.country.isin(a.unseen or [])
     log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{a.lo}, {a.hi}] + unseen {a.unseen})")
-    cache = Path(a.out, "ce_scores.parquet")
-    if cache.exists():
-        S = pd.read_parquet(cache)
+    Path(a.out, "chunks").mkdir(parents=True, exist_ok=True)
+    sub = T[sel]
+    rows = np.flatnonzero(sel.to_numpy())
+    tcache = Path(a.out, "texts.parquet")                           # parsed texts, reused after a disconnect
+    if tcache.exists():
+        tx = pd.read_parquet(tcache).set_index("id").text
     else:
-        sub = T[sel]
         tx, _ = entity_text(a.data, "test", set(sub.s1_id) | set(sub.rec_id))
-        tok, model, dev = load_model(a)
-        ce = predict(a, tok, model, dev, tx.reindex(sub.s1_id).tolist(), tx.reindex(sub.rec_id).tolist())
-        S = pd.DataFrame({"row": np.flatnonzero(sel.to_numpy()), "ce": ce})
-        Path(a.out).mkdir(parents=True, exist_ok=True)
-        S.to_parquet(cache, index=False)
+        pd.DataFrame({"id": tx.index, "text": tx.to_numpy()}).to_parquet(tcache, index=False)
+    A_all, B_all = tx.reindex(sub.s1_id).tolist(), tx.reindex(sub.rec_id).tolist()
+    tok = model = dev = None
+    for i in range(0, len(rows), a.chunk):                          # each chunk saved: resume skips finished ones
+        f = Path(a.out, "chunks", f"chunk_{i // a.chunk:05d}.parquet")
+        if f.exists():
+            continue
+        if model is None:
+            tok, model, dev = load_model(a)
+        ce = predict(a, tok, model, dev, A_all[i:i + a.chunk], B_all[i:i + a.chunk])
+        pd.DataFrame({"row": rows[i:i + a.chunk], "ce": ce}).to_parquet(f.with_suffix(".tmp"), index=False)
+        f.with_suffix(".tmp").replace(f)
+        log(f"chunk {i // a.chunk + 1}/{math.ceil(len(rows) / a.chunk)} saved")
+    S = pd.concat([pd.read_parquet(f) for f in sorted(Path(a.out, "chunks").glob("chunk_*.parquet"))],
+                  ignore_index=True)
+    assert len(S) == len(rows), (len(S), len(rows))
     p = T.prob.to_numpy().astype(np.float64).copy()
     p[S.row.to_numpy()] = blend_prob(np.array(cfg["w"]), p[S.row.to_numpy()], S.ce.to_numpy())
     T["prob"] = p
@@ -319,6 +360,9 @@ p.add_argument("--bs", type=int, default=32)
 p.add_argument("--bs-pred", type=int, default=256)
 p.add_argument("--lr", type=float, default=2e-5)
 p.add_argument("--max-len", type=int, default=160)
+p.add_argument("--ckpt-every", type=int, default=1500, help="train: checkpoint to --model-dir every N steps")
+p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
+p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
 p.add_argument("--w-other", type=float, default=10.0, help="eval: 10 for sampled dev pairs, 1 for --dev-full pairs")
 a = p.parse_args()
 W_OTHER = a.w_other

@@ -314,6 +314,47 @@ def cmd_eval(a):
     log(f"blend weights {np.round(w, 3).tolist()}, thresholds {thr} -> {a.model_dir}/blend.json")
 
 
+def per_s1(V, truth, col, thr):
+    """F0.5 per ce-val S1 (Series indexed by S1), same rules as macro()."""
+    b = V.sort_values(col, ascending=False).drop_duplicates("rec_id")
+    b = b[b[col].to_numpy() >= b.country.map(thr).to_numpy()]
+    tp = b[b.is_true].groupby("s1_id").size()
+    fp = b[~b.is_true].assign(w=np.where(b[~b.is_true].full, 1.0, W_OTHER)).groupby("s1_id").w.sum()
+    t_, f_, n_ = tp.reindex(truth.s1).fillna(0).to_numpy(), fp.reindex(truth.s1).fillna(0).to_numpy(), truth.n.to_numpy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        P_, R_ = t_ / (t_ + f_), t_ / n_
+        f = np.where(n_ == 0, (f_ == 0).astype(float), np.where(t_ == 0, 0.0, 1.25 * P_ * R_ / (0.25 * P_ + R_)))
+    return pd.Series(f, index=truth.s1.to_numpy())
+
+
+def cmd_check(a):
+    """Honest estimate: thresholds chosen on half A of the ce-val S1, scored on half B (and vice versa);
+    paired bootstrap 95% CI of blend (and ce) minus judge, per country."""
+    V = pd.read_parquet(Path(a.model_dir, "val_scored.parquet"))
+    truth = pd.read_parquet(Path(a.inp).with_name("val_truth.parquet"))
+    truth["n"] = truth.m.map(lambda m: len([x for x in m.split(",") if x]))
+    if a.truth_in_pairs:
+        truth = truth[truth.s1.isin(set(V.s1_id))]
+    half = np.array([h(s, "|half", 2) for s in truth.s1])
+    grid = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+    rng = np.random.default_rng(0)
+    for c in sorted(truth.country.dropna().unique()):
+        out = {}
+        for col in ("prob", "ce", "blend"):
+            scores = []
+            for f in (0, 1):
+                tA, tB = truth[(truth.country == c).to_numpy() & (half == f)], truth[(truth.country == c).to_numpy() & (half != f)]
+                t = max(grid, key=lambda t: per_s1(V, tA, col, {c: t}).mean())
+                scores.append(per_s1(V, tB, col, {c: t}))
+            out[col] = pd.concat(scores)
+        line = f"  {c:6s} out-of-fold F0.5: judge {out['prob'].mean():.4f} | CE {out['ce'].mean():.4f} | blend {out['blend'].mean():.4f}"
+        for col in ("ce", "blend"):
+            d = (out[col] - out["prob"].reindex(out[col].index)).to_numpy()
+            bs = [d[rng.integers(0, len(d), len(d))].mean() for _ in range(1000)]
+            line += f" | {col}-judge {d.mean():+.4f} [{np.percentile(bs, 2.5):+.4f}, {np.percentile(bs, 97.5):+.4f}]"
+        print(line + f"  ({len(out['prob']):,} S1)", flush=True)
+
+
 # ------------------------------------------------------------------ apply (test)
 def cmd_apply(a):
     s1 = read_tsv(f"{a.data}/test/test_source1.tsv")[["entity_id", "country"]]
@@ -369,7 +410,7 @@ def cmd_apply(a):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("cmd", choices=["build", "train", "eval", "apply"])
+    p.add_argument("cmd", choices=["build", "train", "eval", "apply", "check"])
     p.add_argument("--pairs")
     p.add_argument("--data")
     p.add_argument("--out")
@@ -399,7 +440,7 @@ def main():
     a = p.parse_args()
     global W_OTHER
     W_OTHER = a.w_other
-    {"build": cmd_build, "train": cmd_train, "eval": cmd_eval, "apply": cmd_apply}[a.cmd](a)
+    {"build": cmd_build, "train": cmd_train, "eval": cmd_eval, "apply": cmd_apply, "check": cmd_check}[a.cmd](a)
 
 
 if __name__ == "__main__":

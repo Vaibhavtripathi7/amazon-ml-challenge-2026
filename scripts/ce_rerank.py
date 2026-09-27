@@ -162,12 +162,24 @@ def cmd_train(a):
         log(f"resumed from checkpoint at step {step}/{steps}")
     model.train()
     per_epoch = math.ceil(len(P) / a.bs)
+    lens = np.array([len(x) + len(z) for x, z in zip(A, B)])
+    run = []
     for ep in range(a.epochs):
-        order = np.random.default_rng(ep).permutation(len(P))
-        skip = max(0, step - ep * per_epoch) * a.bs                  # batches already done in this epoch
-        if skip >= len(P):
+        # length-bucketed batches (less padding, ~1.5x faster): shuffle, sort within blocks of 64 batches by length,
+        # cut into batches, shuffle the batch order. Deterministic per epoch, so resume can skip finished batches.
+        rng = np.random.default_rng(ep)
+        order = rng.permutation(len(P))
+        blk = a.bs * 64
+        order = np.concatenate([o[np.argsort(lens[o], kind="stable")] for o in np.array_split(order, max(1, math.ceil(len(order) / blk)))])
+        bl = [order[i:i + a.bs] for i in range(0, len(order), a.bs)]
+        bl = [bl[i] for i in rng.permutation(len(bl))]
+        done = max(0, step - ep * per_epoch)                        # batches already done in this epoch
+        if done >= len(bl):
             continue
-        for j, enc in batches(tok, A, B, a.bs, a.max_len, order[skip:]):
+        for b in bl[done:]:
+            j = b
+            enc = tok([A[k] for k in j], [B[k] for k in j], truncation=True, max_length=a.max_len, padding=True,
+                      return_tensors="pt")
             enc = {k: v.to(dev) for k, v in enc.items()}
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
                 out = model(**enc).logits.squeeze(-1)
@@ -180,8 +192,10 @@ def cmd_train(a):
             scaler.update()
             sched.step()
             step += 1
+            run.append(loss.item())
             if step % 200 == 0 or step == steps:
-                log(f"  epoch {ep} step {step}/{steps} loss {loss.item():.4f}")
+                log(f"  epoch {ep} step {step}/{steps} loss (mean of last {len(run)} steps) {np.mean(run):.4f}")
+                run = []
             if step % a.ckpt_every == 0 and step < steps:
                 tmp = ckpt.with_suffix(".tmp")
                 torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),

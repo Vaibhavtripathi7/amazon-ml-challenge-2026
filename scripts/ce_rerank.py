@@ -405,7 +405,17 @@ def cmd_apply(a):
                   ignore_index=True)
     assert len(S) == len(rows), (len(S), len(rows))
     p = T.prob.to_numpy().astype(np.float64).copy()
-    p[S.row.to_numpy()] = blend_prob(np.array(cfg["w"]), p[S.row.to_numpy()], S.ce.to_numpy())
+    rows_, ce_ = S.row.to_numpy(), S.ce.to_numpy()
+    w_seen = np.array(cfg["w"])
+    # unseen countries (France): weights fitted in the unseen-country rehearsal (Cell 6: US-only model scored on India),
+    # where the transformer transferred poorly (India 0.8909 alone) and the blend had to lean on the judge
+    w_unseen = np.array(json.load(open(a.unseen_blend))["w"]) if a.unseen_blend else w_seen
+    uns = T.country.to_numpy()[rows_]
+    uns = np.isin(uns, a.unseen or [])
+    p[rows_[~uns]] = blend_prob(w_seen, p[rows_[~uns]], ce_[~uns])
+    p[rows_[uns]] = blend_prob(w_unseen, p[rows_[uns]], ce_[uns])
+    log(f"blend weights: seen {np.round(w_seen, 3).tolist()} on {int((~uns).sum()):,} pairs | unseen {a.unseen} "
+        f"{np.round(w_unseen, 3).tolist()} on {int(uns.sum()):,} pairs")
     T["prob"] = p
     thr = dict(cfg["thr"])
     thr_unseen = a.unseen_threshold if a.unseen_threshold is not None else max(thr.values())
@@ -452,6 +462,7 @@ def main():
     p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
     p.add_argument("--bands", nargs="+", default=None, help='check: footprints to compare, e.g. 0.01,0.99 0.001,0.999 0,1')
+    p.add_argument("--unseen-blend", default=None, help="apply: blend.json fitted in the unseen-country rehearsal")
     p.add_argument("--tag", default="", help="eval/check/apply: suffix for blend/val_scored files (compare variants)")
     p.add_argument("--truth-in-pairs", action="store_true", help="eval on a test slice: only S1 present in the pairs")
     p.add_argument("--w-other", type=float, default=10.0, help="eval: 10 for sampled dev pairs, 1 for --dev-full pairs")

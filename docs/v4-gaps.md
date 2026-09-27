@@ -115,6 +115,15 @@ word-pass misses), 3.3 ms/record/core → about +2 to 2.5 h on the full Kaggle r
 budget and unproven after it; +2.5 h leaves no room to recover before the deadline). Kept behind `AMLC_TF_CHAR=1` for a
 reserve run.
 
+### E9 — self-training on the SEEN countries, 09:17
+A2 + `--st-countries US India` (300 rounds): t2 −0.0012 [−0.0019, −0.0004], t3 −0.0014 [−0.0022, −0.0006] vs A2 →
+**rejected**. Pseudo-labels help only where the judge has no real labels (France); for US/India they add noise.
+US full-scale char benchmark: word passes 0.9929 → + char 0.9943 at 9.2 ms/record → confirms E8 (char pass off).
+
+### E10 — holdout strength, 09:50
+A6 = A2 with holdout 0.30: t2 0.9894 (−0.0012 vs A2), t3 0.9885 (−0.0011); fewer true matches reach the judge
+(0.9871 vs 0.9909). **0.21 (matched to test's measured records per S1) kept.**
+
 ## v4 final configuration (09:00)
 `--holdout-s1 0.21 --max-cands 5.5 --features sib --st-countries France --st-rounds 300`, `AMLC_TF_CHAR=0`,
 pooled judge, per-country thresholds from the test-like dev (France: strictest), France normaliser, stage-1 fix.

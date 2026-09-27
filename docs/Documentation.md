@@ -2,12 +2,12 @@
 
 **Team Name:** [TO FILL]
 **Team Members:** Vaibhav Tripathi, Krithi, [TO FILL]
-**Submission Date:** 2026-09-28
+**Submission Date:** 2026-09-27
 
 ---
 
 ## 1. Executive Summary
-A three-stage, CPU-only pipeline: (0) a country-aware normaliser that undoes the data generator's corruptions (Indian-script names, accents, reordered addresses, French `bis`/`ter` numbers, departments vs regions); (1) retrieval with exact keys and TF-IDF searches, pruned by a LightGBM ranker to a small candidate set (about 4–6 per Source-1 business); (2) a LightGBM judge on about 70 similarity, ambiguity and "sibling" features, trained in a **test-like world** where part of the reference businesses is held out, so that it learns that a record's owner may be absent.
+A four-stage pipeline (stages 0–2 on CPU, stage 3 on one GPU): (0) a country-aware normaliser that undoes the data generator's corruptions (Indian-script names, accents, reordered addresses, French `bis`/`ter` numbers, departments vs regions); (1) retrieval with exact keys and TF-IDF searches, pruned by a LightGBM ranker to a small candidate set (about 4–6 per Source-1 business); (2) a LightGBM judge on about 70 similarity, ambiguity and "sibling" features, trained in a **test-like world** where part of the reference businesses is held out, so that it learns that a record's owner may be absent.
 The key insight: the test set has about twice as many look-alike decoy records per business as train, so a model tuned on train over-merges. We reproduce test density during training and threshold selection.
 
 ---
@@ -46,6 +46,19 @@ The key insight: the test set has about twice as many look-alike decoy records p
 **Threshold selection method:** macro F0.5 per S1 on a held-out, test-density validation set (holdout world), chosen per country; France (no validation data) uses the strictest of them. Each record goes to its single best S1 if its probability passes its country's threshold.
 
 ---
+
+### Stage 3 — multilingual cross-encoder re-scoring (GPU)
+- **Model:** `xlm-roberta-base` (MIT licence, 278M parameters, 100 languages incl. Indian scripts and French), fine-tuned
+  as a pair classifier, Ditto-style: `name | address | parsed hints (house, street, city, state)` for both records.
+- **Training data:** our own candidate pairs from the held-out dev run, every pair labelled from the ground truth
+  (29–41% negatives = real decoys); 80/20 split by S1 business (no business in both).
+- **Use:** re-scores only the pairs the LightGBM judge is unsure about (probability 0.01–0.99, 12% of dev pairs) and is
+  blended with the judge (logistic regression on both logits, cross-fitted on held-out businesses).
+- **Held-out result (thresholds chosen on one half of the businesses, scored on the other, paired bootstrap 95% CI):**
+  India 0.9752 → **0.9838** (+0.0085 [+0.0074, +0.0097]), US 0.9873 → **0.9904** (+0.0031 [+0.0025, +0.0037]).
+  AUC on the uncertain pairs: judge 0.9354 → cross-encoder 0.9789.
+- **Unseen country:** trained on US only and scored on India, the cross-encoder alone falls to 0.8909 (the judge:
+  0.9755), so for France (unseen) the blend uses the weights fitted in that rehearsal, which lean on the judge.
 
 ## 5. Results & Error Analysis
 

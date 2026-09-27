@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ["prepare.py", "judge_v2.py", "run_v2.py", "mistakes.py"]
+SCRIPTS = ["prepare.py", "judge_v2.py", "run_v2.py", "mistakes.py", "ce_rerank.py", "synth_pairs.py"]
 REQUIREMENTS = """anyascii==0.3.3
 lightgbm==4.7.0
 numpy==2.5.3
@@ -26,6 +26,8 @@ scikit-learn==1.9.1
 scipy==1.18.1
 sparse-dot-topn==1.2.0
 tqdm==4.70.1
+torch==2.14.0
+transformers==5.17.0
 """
 README = """# Business Entity Resolution — code
 
@@ -42,6 +44,16 @@ Python 3.12. CPU only; no external data, APIs or pretrained models.
 Steps (resumable; each writes a DONE marker): prepare (clean + parse every row once) -> rank_train
 (stage-1 ranker) -> rank_eval (candidate budget) -> train (stage-2 judge) -> dev (held-out validation,
 threshold per country) -> test (writes run/output/*.tsv and the scored pairs) -> validate.
+
+Stage 3 (GPU, e.g. one T4): multilingual cross-encoder (xlm-roberta-base, MIT licence) re-scores the uncertain pairs
+and is blended with the LightGBM probability (weights fitted on held-out dev businesses):
+    python -u src/ce_rerank.py build --pairs run/dev_pairs_v2.parquet --data <dataset dir> --out ce/train.parquet
+    python -u src/ce_rerank.py train --in ce/train.parquet --model-dir ce/model --epochs 2 --bs 32 --max-len 160 --max-pairs 600000
+    python -u src/ce_rerank.py train --in ce/train.parquet --model-dir ce/model_us --train-countries US --epochs 1 --max-pairs 150000
+    python -u src/ce_rerank.py eval  --in ce/train.parquet --model-dir ce/model_us --all-pairs
+    python -u src/ce_rerank.py eval  --in ce/train.parquet --model-dir ce/model --lo 0.01 --hi 0.99 --tag _b
+    python -u src/ce_rerank.py apply --test-pairs run/output/test_pairs.parquet --data <dataset dir> --model-dir ce/model \
+        --tag _b --unseen-blend ce/model_us/blend.json --unseen-band-only --unseen-threshold 0.7 --out output
 
 A threshold can be changed afterwards without re-scoring:
     python -u src/judge_v2.py rethreshold --work run/work --pairs-in run/output/test_pairs.parquet \\

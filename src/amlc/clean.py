@@ -25,6 +25,7 @@ STREET = {
 DROP_ADDR = {"null", "none", "na", "no", "hno", "hn", "c", "o", "r"}
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _NUMBER = re.compile(r"^[a-z]?0*(\d+)[a-z]{0,2}$")  # 152nd, 114b, a14, 001300
+_FR_NUM = re.compile(r"0*(\d+)([abctq])")
 _DOTTED = re.compile(r"\b(?:[a-z]\.){2,}[a-z]?")  # l.l.c. / p.v.t
 
 
@@ -38,12 +39,19 @@ def clean_name(name):
     return " ".join(w for w in words if w not in LEGAL)
 
 
-def clean_address(address):
-    """Returns (words, numbers) as space-joined strings."""
+def clean_address(address, country=None):
+    """Returns (words, numbers) as space-joined strings. France keeps bis/ter as part of the number ('5b')."""
     words, nums = [], []
-    for tok in _NON_ALNUM.sub(" ", _fold(address)).split():
+    text = _fold(address)
+    if country == "France":
+        from amlc.norm import fr_letters
+        text = fr_letters(text)
+    for tok in _NON_ALNUM.sub(" ", text).split():
         m = _NUMBER.match(tok)
-        if m:
+        fr = _FR_NUM.fullmatch(tok) if country == "France" else None
+        if fr:
+            nums.append((fr.group(1).lstrip("0") or "0") + fr.group(2))
+        elif m:
             nums.append(m.group(1) or "0")
         elif tok not in DROP_ADDR:
             words.append(STREET.get(tok, tok))

@@ -23,11 +23,11 @@ from amlc.norm import parse_address, parse_name
 def _clean_chunk(df):
     df = df.rename(columns={"business_name": "raw_name", "business_address": "raw_address"})
     df["name"] = [clean_name(s) for s in df.raw_name]
-    addr = [clean_address(s) for s in df.raw_address]
+    addr = [clean_address(s, c) for s, c in zip(df.raw_address, df.country)]
     df["addr"] = [a for a, _ in addr]
     df["nums"] = [n for _, n in addr]
     # stage-0 slots (amlc.norm): n_* name fields, a_* address fields
-    names = [parse_name(s) for s in df.raw_name]
+    names = [parse_name(s, c) for s, c in zip(df.raw_name, df.country)]
     for k in ("core", "key", "fold", "flat", "suffix", "alias", "is_domain"):
         df["n_" + k] = [n[k] for n in names]
     addrs = [parse_address(s, c) for s, c in zip(df.raw_address, df.country)]

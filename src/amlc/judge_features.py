@@ -6,11 +6,12 @@ Splink author (IDF weighting, distinguishability), Foursquare solutions (string 
 """
 import collections
 import math
+import re
 
 import numpy as np
 import pandas as pd
 from rapidfuzz import fuzz, process
-from rapidfuzz.distance import JaroWinkler
+from rapidfuzz.distance import JaroWinkler, Levenshtein
 
 from amlc.keys import KEY_TYPES
 from amlc.norm import number_relation
@@ -27,6 +28,10 @@ FEATURES = (
     + [f"k_{k}" for k in KEY_TYPES] + [f"{t}_score" for t in TF] + [f"{t}_rank" for t in TF]
     + ["n_keys", "n_cands", "nm_tset_gap", "ad_cov_gap", "tf_best_gap", "is_top_tf"]
 )
+
+
+# Sibling-vs-noisy-copy signals (dev wrong merges / test 0.4-0.7 band: a real word swapped, house moved a little).
+SIB_FEATURES = ["nm_x_rec", "nm_x_s1", "nm_x_sim", "nm_x_idf", "house_ndiff", "house_lev"]
 
 
 class Context:
@@ -66,6 +71,32 @@ def _idf_overlap(xs, ys, countries, ctx, kind):
         ws = sum(idf.get(t, d) for t in sh)
         ca, cb = ws / wa, ws / wb
         out[i] = (ws, max((idf.get(t, d) for t in sh), default=0.0), min(ca, cb), max(ca, cb), wb, wa)
+    return out
+
+
+def _sibling(sc, rc, sh, rh, countries, ctx):
+    """Unmatched name words: counts, how well the worst record word is explained by an S1 word (typo ~0.9,
+    swapped word ~0.5), that word's IDF (common word = low); house numeric distance and edit distance."""
+    out = np.full((len(sc), 6), -1.0, np.float32)
+    for i, (x, y, a, b, c) in enumerate(zip(sc, rc, sh, rh, countries)):
+        A, B = set(x.split()), set(y.split())
+        ua, ub = A - B, B - A
+        out[i, 0], out[i, 1] = len(ub), len(ua)
+        if ub:
+            idf, d = ctx.idf.get((c, "n"), {}), ctx.default_idf["n"]
+            worst, widf = 2.0, -1.0
+            for t in ub:
+                sim = max((JaroWinkler.normalized_similarity(t, u) for u in ua), default=0.0)
+                if sim < worst:
+                    worst, widf = sim, idf.get(t, d)
+            out[i, 2], out[i, 3] = worst, widf
+        else:
+            out[i, 2] = 1.0
+        if a and b:
+            da, db = re.sub(r"\D", "", a), re.sub(r"\D", "", b)
+            if da and db and len(da) < 12 and len(db) < 12:
+                out[i, 4] = math.log1p(abs(int(da) - int(db)))
+            out[i, 5] = Levenshtein.distance(a, b)
     return out
 
 
@@ -137,4 +168,7 @@ def pair_features(ctx, recs, s_idx, r_idx, flags, workers=1):
     best_tf = X[[f"{t}_score" for t in TF]].max(axis=1)
     X["tf_best_gap"] = best_tf - best_tf.groupby(r_idx).transform("max")
     X["is_top_tf"] = (X.tf_best_gap == 0).astype(np.int8)
-    return X[FEATURES]
+    sib = _sibling(sc, rc, g(s1, "a_house", s_idx), g(recs, "a_house", r_idx), country, ctx)
+    for j, k in enumerate(SIB_FEATURES):
+        X[k] = sib[:, j]
+    return X[FEATURES + SIB_FEATURES]

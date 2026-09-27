@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from amlc.clean import clean_address
-from amlc.judge_features import FEATURES, REL, TF, Context, pair_features
+from amlc.judge_features import FEATURES, SIB_FEATURES, REL, TF, Context, pair_features
 from amlc.keys import KEY_TYPES
 from amlc.norm import parse_address, parse_name
 
@@ -33,7 +33,7 @@ def feats(recs, s_idx, r_idx):
 def test_true_match_beats_namesake_on_address_features():
     recs = frame([["S2-x", "US", "BEHAVIORAL HEALTH-PARTNERS", "#185 LOCUST VIEW WAY, TROY, OH"]])
     X = feats(recs, [0, 1], [0, 0])
-    assert list(X.columns) == FEATURES
+    assert list(X.columns) == FEATURES + SIB_FEATURES
     assert X.nm_tset[0] == X.nm_tset[1] == 100          # names identical: name alone can't decide
     assert X.house_rel[0] == REL["equal"] and X.house_rel[1] == REL["substitution"]
     assert X.ad_idf_cov_max[0] > X.ad_idf_cov_max[1] and X.city_eq[0] == 1 and X.state_state[1] == 3
@@ -53,3 +53,18 @@ def test_suffix_states_and_domain_and_missing_address():
     assert X.rec_is_domain[0] == 1 and X.flat_ratio[0] == 100 and X.rec_has_addr[0] == 0
     assert X.suffix_state[1] == 3                       # Inc vs LLC: conflict
     assert X.house_rel[0] == REL["missing"]
+
+
+def test_sibling_features_separate_typo_from_swapped_word():
+    from amlc.judge_features import _sibling
+
+    class C:
+        idf = {("US", "n"): {"sportive": 2.0, "culture": 2.5, "femme": 3.0}}
+        default_idf = {"n": 9.0}
+    out = _sibling(["femme culture", "femme culture", "femme culture"], ["femme sportive", "femme cultrue", "femme culture"],
+                   ["66", "66", "1736"], ["71", "66", "1725"], ["US"] * 3, C)
+    swap, typo, same = out
+    assert swap[0] == 1 and swap[1] == 1 and swap[2] < 0.8 and swap[3] == 2.0      # real word swapped, common word
+    assert typo[2] > 0.9 and typo[3] == 9.0                                          # typo: close, unseen token
+    assert same[0] == 0 and same[2] == 1.0 and same[3] == -1
+    assert swap[4] > 1.5 and typo[4] == 0 and typo[5] == 0 and same[5] == 2

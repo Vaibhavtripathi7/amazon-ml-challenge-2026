@@ -22,6 +22,7 @@ p.add_argument("--work-in", default=None, help="already-prepared parquet dir (sk
 p.add_argument("--stop-after", default=None, choices=STEPS)
 p.add_argument("--threads", type=int, default=4)
 p.add_argument("--sample", type=float, default=None)
+p.add_argument("--judge-args", default="", help='extra args for every judge_v2 step, e.g. "--tol 0.0002"')
 a = p.parse_args()
 
 out = Path(a.out)
@@ -30,7 +31,7 @@ for d in ("models", "logs", "output"):
 here = Path(__file__).parent
 work = a.work_in or str(out / "work")
 common = ["--work", work, "--rank-model", str(out / "models/rank_v2.txt"), "--model", str(out / "models/judge_v2.txt"),
-          "--threads", str(a.threads)] + (["--sample", str(a.sample)] if a.sample else [])
+          "--threads", str(a.threads)] + (["--sample", str(a.sample)] if a.sample else []) + a.judge_args.split()
 validator = Path(a.data).parent / "utils" / "validate_submission.py"
 cmds = {
     "prepare": [str(here / "prepare.py"), "--data", a.data, "--out", work, "--workers", str(a.threads)],

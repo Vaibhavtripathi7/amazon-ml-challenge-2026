@@ -7,6 +7,7 @@ Record sets are fixed, disjoint hash buckets of the record id (crc32 % 100), so 
   dev   : records owned by dev S1 (all) + distractors from buckets 90-99 (10%, weighted x10 in scoring)
 Dev S1 = crc32(S1 id) % 10 == 0.
 """
+import os
 import resource
 import time
 import zlib
@@ -28,6 +29,12 @@ TF_PASSES = {
     "tf_mix": dict(field="mix", analyzer="word", ngram_range=(1, 1), min_df=1, max_df=0.05),
 }
 TF_K = {"tf_name": 20, "tf_mix": 40}   # deeper searches; stage 1 prunes, so candidate files do not grow
+# G2: character 3-grams on the cleaned name find garbled / transliterated names (owner in top-10 for 50% of the
+# shortlist misses on the test-like world). Switch: AMLC_TF_CHAR=1 (must be the same for train and test).
+TF_CHAR = os.environ.get("AMLC_TF_CHAR") == "1"
+if TF_CHAR:
+    TF_PASSES["tf_char"] = dict(field="n_core", analyzer="char_wb", ngram_range=(3, 3), min_df=1, max_df=0.02)
+    TF_K["tf_char"] = 10
 TF = list(TF_PASSES)
 RANK_SET, JUDGE_SET, DEV_OTHER = (0, 4), (4, 44), (90, 100)
 DEV_OTHER_WEIGHT = 100 / (DEV_OTHER[1] - DEV_OTHER[0])

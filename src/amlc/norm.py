@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from anyascii import anyascii
+from rapidfuzz.distance import Levenshtein
 
 # ---------------------------------------------------------------- names
 _ALIAS = re.compile(r"\s*(?:\bf\s*/\s*k\s*/\s*a\b|\bfka\b|\bformerly\b|\bd\s*/\s*b\s*/\s*a\b|\bdba\b|\bt\s*/\s*a\b|"
@@ -30,7 +31,8 @@ SUFFIX_CANON = {
     # anyascii renderings of Indian-script 'Private', 'Limited', 'LLP'
     "praivet": "pvt", "elelpi": "llp", "pvtltd": "pvt",
 }
-HONORIFIC = {"mr", "mrs", "ms", "shri", "sri", "smt", "ets", "groupe", "cie"}
+HONORIFIC = {"mr", "mrs", "ms", "shri", "sri", "smt", "ets", "groupe", "cie", "etablissements", "compagnie"}
+FR_SUFFIX = {"ei": "ei"}   # France-only: 'ei' occurs in 453 train names as a plain word
 CONNECTOR = {"and", "of", "the", "du", "de", "la", "le", "les", "des", "et", "d", "l"}
 _HOMO = str.maketrans({"1": "l", "0": "o", "5": "s", "6": "g", "i": "l"})
 
@@ -68,7 +70,7 @@ def _ascii(s, kind=None):
     return anyascii(s).lower()
 
 
-def parse_name(raw):
+def parse_name(raw, country=None):
     s = _ascii(raw, "name")
     s = s.split("|")[0]                              # 'Name | www.site.com' -> 'Name'
     s = _ID.sub(" ", s)
@@ -92,6 +94,9 @@ def parse_name(raw):
             continue
         if f in _FOLDED_SUFFIX:
             suffix.add(_FOLDED_SUFFIX[f])
+            continue
+        if country == "France" and w in FR_SUFFIX:
+            suffix.add(FR_SUFFIX[w])
             continue
         if w in seen:                                # token duplication operator
             continue
@@ -132,6 +137,8 @@ def number_relation(a, b):
         return "missing"
     if a & b:
         return "equal"
+    if any(not x.replace("/", "").isdigit() for x in a | b):   # France '5b' (bis) vs '5': a different door
+        return "substitution"
     for x in a:
         for y in b:
             lo, hi = (x, y) if len(x) < len(y) else (y, x)
@@ -195,6 +202,64 @@ IN_NATIVE = {_NON_ALNUM.sub(" ", anyascii(n).lower()).strip(): e for n, e in zip
 _RES = Path(__file__).parent / "resources" / "in_native_states.json"   # derived from train pairs (scripts/build_native_states.py)
 if _RES.exists():
     IN_NATIVE.update(json.loads(_RES.read_text()))
+# ---------------------------------------------------------------- France (unseen in train)
+# Every rule here runs only when country == "France", so the train parquet (US/India) is unchanged.
+# Measured on test France: records whose S1 name + number + street match write S1's 'bis' as 'bis' 81% / 'B' 18%,
+# bare number 1% -> the letter is part of the door: '5 bis' = '5B' = '5b' != '5'.
+_FR_LETTER = re.compile(r"\b0*(\d+)\s*-?\s*(bis|ter|quater|[abct])\b(?!\s*\d)")
+_FR_LETTER_CODE = {"bis": "b", "ter": "t", "quater": "q"}
+_FR_CORE = re.compile(r"0*(\d+)([abctq])")
+
+
+def fr_letters(s):
+    """'5 bis' / '5bis' / '5 B' / '5-b' -> '5b'; ter -> t, quater -> q (lowercase ASCII input)."""
+    return _FR_LETTER.sub(lambda m: m.group(1) + _FR_LETTER_CODE.get(m.group(2), m.group(2)), s)
+
+
+def _cores(token, country):
+    if country == "France":
+        m = _FR_CORE.fullmatch(token)
+        if m:
+            return {_strip0(m.group(1)) + m.group(2)}
+    return house_cores(token)
+
+
+# street words after the house number in test France records (counts: cour 7.4k, ch 6.6k, cite 5.9k, crs 4.3k, q 3.9k)
+FR_STREET_TYPE = {
+    "rue": "rue", "r": "rue", "route": "route", "rte": "route", "allee": "allee", "all": "allee", "alle": "allee",
+    "alee": "allee", "impasse": "impasse", "imp": "impasse", "chemin": "chemin", "chem": "chemin", "ch": "chemin",
+    "quai": "quai", "q": "quai", "cours": "cours", "crs": "cours", "cour": "cour", "cite": "cite",
+    "passage": "passage", "pass": "passage", "psg": "passage", "residence": "residence", "res": "residence",
+    "avenue": "avenue", "ave": "avenue", "av": "avenue", "boulevard": "boulevard", "blvd": "boulevard",
+    "bd": "boulevard", "place": "place", "pl": "place", "square": "square", "sq": "square", "chaussee": "chaussee",
+    "lotissement": "lotissement", "mail": "mail", "esplanade": "esplanade", "digue": "digue", "parvis": "parvis",
+    "sente": "sente", "ruelle": "ruelle", "promenade": "promenade",
+}
+FR_ABBR = {"st": "saint", "ste": "sainte"}   # 'St Nazaire' (15.8k record components) is a city, not a street
+# department -> region, learned from test co-occurrence (record department next to an S1 city of one region):
+# nord 150,860/150,875 hauts de france; gironde 150,420/150,470 nouvelle aquitaine;
+# loire atlantique 118,995/119,226 pays de la loire; pas de calais 27,838/27,848 hauts de france
+FR_DEPT = {"nord": "hauts de france", "pas de calais": "hauts de france", "gironde": "nouvelle aquitaine",
+           "loire atlantique": "pays de la loire"}
+
+
+def _fr_type(t):
+    """France street type, tolerating the generator's typos of the long words (aveue, aenue, bouelvard)."""
+    if t in FR_STREET_TYPE:
+        return FR_STREET_TYPE[t]
+    if len(t) >= 5 and t[0] == "a" and Levenshtein.distance(t, "avenue") <= 2:
+        return "avenue"
+    if len(t) >= 7 and t[0] == "b" and Levenshtein.distance(t, "boulevard") <= 2:
+        return "boulevard"
+    return None
+
+
+def _stype(t, country):
+    if country == "France":
+        return _fr_type(t)
+    return STREET_TYPE.get(t) if (t != "r") else None
+
+
 FR_REGIONS = {"auvergne rhone alpes", "bourgogne franche comte", "bretagne", "centre val de loire", "corse",
               "grand est", "hauts de france", "ile de france", "normandie", "nouvelle aquitaine", "occitanie",
               "pays de la loire", "provence alpes cote d azur"}
@@ -217,6 +282,7 @@ def _state(comp, country):
             return code[c]
         return IN_NATIVE.get(c)
     if country == "France":
+        c = FR_DEPT.get(c, c)
         return c if c in FR_REGIONS else None
     return None
 
@@ -226,6 +292,8 @@ def parse_address(raw, country):
     s = re.sub(r"\bn\s*(?:°|deg)", " no ", s).replace("#", " ").replace("'", " ")   # N° (anyascii: 'ndeg')
     s = re.sub(r"(?<=[a-z])\.(?=[a-z\s]|$)", " ", s)            # 'h.no' -> 'h no', 'st.' -> 'st'
     s = re.sub(r"\b(?:h|s|d)\s+no\b", " no ", s)                 # H.NO / S.No / D.No prefixes
+    if country == "France":
+        s = fr_letters(s)
     unit = ""
     m = _UNIT.search(s)
     if m:
@@ -247,28 +315,30 @@ def parse_address(raw, country):
         if country != "France" and len(toks) >= 2 and toks[-1] == "saint":   # generator's 'St' -> 'Saint'
             toks[-1] = "street"
         toks = [ORDINAL_WORD.get(t, t) for t in toks]
-        types = [i for i, t in enumerate(toks) if STREET_TYPE.get(t) and (t != "r" or country == "France")]
+        if country == "France":
+            toks = [FR_ABBR.get(t, t) for t in toks]
+        types = [i for i, t in enumerate(toks) if _stype(t, country)]
         nums = [i for i, t in enumerate(toks) if re.search(r"\d", t)]
         if types and not street_type:
             ti = types[-1] if country != "France" else types[0]
-            street_type = STREET_TYPE[toks[ti]]
+            street_type = _stype(toks[ti], country)
             hi = next((i for i in nums if i < ti or country == "France"), None)
             if hi is not None and not re.fullmatch(r"\d+(?:st|nd|rd|th)", toks[hi]):
-                alts |= house_cores(toks[hi])
-                house = house or min(alts, key=len, default="")
+                alts |= _cores(toks[hi], country)
+                house = house or min(alts, key=lambda x: (len(x), x), default="")   # deterministic tie-break
             name = [re.sub(r"^(\d+)(?:st|nd|rd|th)$", r"\1", t) for i, t in enumerate(toks)
-                    if i != ti and i != hi and t not in CONNECTOR and not STREET_TYPE.get(t) == t and i not in
+                    if i != ti and i != hi and t not in CONNECTOR and not _stype(t, country) == t and i not in
                     [j for j in types if j != ti]]
             street = " ".join(name)
-            tokens += ["n" + x for x in alts] + name + ["t_" + street_type]
+            tokens += ["n" + x for x in sorted(alts)] + name + ["t_" + street_type]
             continue
         if nums and not alts:
-            cores = house_cores(toks[nums[0]])
+            cores = _cores(toks[nums[0]], country)
             if cores:
                 alts |= cores
-                house = min(cores, key=len)
+                house = min(cores, key=lambda x: (len(x), x))
                 toks = [t for i, t in enumerate(toks) if i != nums[0]]
-                tokens += ["n" + x for x in cores]
+                tokens += ["n" + x for x in sorted(cores)]
         words = [t for t in toks if t not in PLACE_SUFFIX and t not in CONNECTOR and not re.search(r"\d", t)]
         if words:
             city_parts.append(" ".join(words))

@@ -1,6 +1,6 @@
 # ML Challenge 2026: Business Entity Resolution Solution
 
-**Team Name:** [TO FILL]
+**Team Name:** Pacman
 **Team Members:** Vaibhav Tripathi (leader), Bazaru Lokesh Ram Chand, S J Krithi
 **Submission Date:** 2026-09-27
 

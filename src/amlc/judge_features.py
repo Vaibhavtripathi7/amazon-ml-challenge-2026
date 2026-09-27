@@ -85,7 +85,7 @@ def _sibling(sc, rc, sh, rh, countries, ctx):
         if ub:
             idf, d = ctx.idf.get((c, "n"), {}), ctx.default_idf["n"]
             worst, widf = 2.0, -1.0
-            for t in ub:
+            for t in sorted(ub):                                  # deterministic tie-break
                 sim = max((JaroWinkler.normalized_similarity(t, u) for u in ua), default=0.0)
                 if sim < worst:
                     worst, widf = sim, idf.get(t, d)

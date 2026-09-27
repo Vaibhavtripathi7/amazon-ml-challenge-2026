@@ -287,7 +287,7 @@ def scored(a, split, keep_fn):
     per = {c: lgb.Booster(model_file=f"{a.model}.{c}") for c in ("US", "India") if Path(f"{a.model}.{c}").exists()}
     name_counts = collections.Counter(zip(s1.country, s1.n_key))
     log(f"{split}: S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']}; judge features {len(feats)}")
-    parts = []
+    parts, st = [], []
     keep = keep_fn(s1) if keep_fn else None
     for i, recs in enumerate(iter_records(a.work, split, keep, seg=make_segmenter(s1))):
         s_idx, r_idx, X = stage12(sl, ctx, s1, recs, models, op, a.threads, name_counts)
@@ -299,8 +299,40 @@ def scored(a, split, keep_fn):
                 prob[k] = mc.predict(X[feats][k], num_threads=a.threads).astype(np.float32)
         parts.append(pd.DataFrame({"s1_idx": s_idx.astype(np.int32), "rec_id": recs.entity_id.to_numpy()[r_idx],
                                    "prob": prob}))
+        if a.st_countries:                                        # keep features of the countries to adapt to
+            k = np.isin(pcountry, a.st_countries)
+            if k.any():
+                st.append((i, k, X[feats][k].reset_index(drop=True)))
         log(f"  chunk {i}: {len(recs):,} records -> {len(X):,} pairs ({len(X) / len(recs):.2f}/record)")
+    if st:
+        self_train(a, judge, parts, st)
     return s1, pd.concat(parts, ignore_index=True)
+
+
+def self_train(a, judge, parts, st):
+    """G4: adapt the judge to a country it never saw in training (France) with its own confident decisions.
+    Per record: best candidate p >= st_hi -> 1 and its other candidates -> 0; best p <= st_lo -> all 0.
+    A few boosting rounds continue from the trained judge (init_model); then that country is rescored."""
+    P = pd.concat([parts[i][k].assign(chunk=i) for i, k, _ in st], ignore_index=True)
+    X = pd.concat([x for _, _, x in st], ignore_index=True)
+    best = P.groupby("rec_id").prob.transform("max").to_numpy()
+    is_best = P.prob.to_numpy() == best
+    y = np.where(best >= a.st_hi, is_best.astype(np.int8), np.where(best <= a.st_lo, 0, -1))
+    lab = y >= 0
+    log(f"self-training on {a.st_countries}: pairs {len(P):,}; pseudo-labelled {lab.sum():,} "
+        f"(positives {(y == 1).sum():,}, negatives {(y == 0).sum():,})")
+    params = dict(objective="binary", learning_rate=0.03, num_leaves=63, min_data_in_leaf=200, feature_fraction=0.8,
+                  bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=a.threads, verbose=-1)
+    m = lgb.train(params, lgb.Dataset(X[lab], y[lab]), a.st_rounds, init_model=judge)
+    m.save_model(a.model + ".st")
+    new = m.predict(X, num_threads=a.threads).astype(np.float32)
+    off = 0
+    for i, k, x in st:
+        prob = parts[i].prob.to_numpy().copy()
+        prob[k] = new[off:off + len(x)]
+        parts[i]["prob"] = prob
+        off += len(x)
+    log(f"self-trained judge saved {a.model}.st ({a.st_rounds} extra rounds); {a.st_countries} rescored")
 
 
 def cmd_dev(a):
@@ -425,6 +457,11 @@ p.add_argument("--pairs-in", default=None, help="rethreshold: scored test pairs 
 p.add_argument("--thresholds", type=float, nargs="+", default=[0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
 p.add_argument("--legacy-cut", action="store_true",
                help="test: reproduce v3's stage-1 cut (score >= min_prob for ANY ranker) to rescore with v3 models")
+p.add_argument("--st-countries", nargs="+", default=None,
+               help="dev/test: self-train the judge on these countries' confident pseudo-labels, then rescore them")
+p.add_argument("--st-hi", type=float, default=0.95)
+p.add_argument("--st-lo", type=float, default=0.05)
+p.add_argument("--st-rounds", type=int, default=100)
 p.add_argument("--per-country", action="store_true", help="train: also one judge per training country (G5)")
 p.add_argument("--max-cands", type=float, default=None, help="rank_eval: candidate budget per dev S1")
 p.add_argument("--tol", type=float, default=0.001, help="max F0.5-ceiling loss accepted to shrink the candidate set")

@@ -10,6 +10,7 @@ Layout (official README):
   Documentation.md (filled template)
 """
 import argparse
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -64,9 +65,10 @@ with zipfile.ZipFile(a.zip, "w", zipfile.ZIP_DEFLATED) as z:
     for f in ("matching_results.tsv", "candidate_pairs.tsv"):
         z.write(out / f, f"output/{f}")
     base = "code/business_entity_resolution"
-    for f in sorted((ROOT / "src/amlc").rglob("*")):
-        if f.is_file() and "__pycache__" not in f.parts:
-            z.write(f, f"{base}/src/amlc/{f.relative_to(ROOT / 'src/amlc')}")
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "src/amlc"], capture_output=True, text=True,
+                             check=True).stdout.split()          # only committed code, never local scratch files
+    for rel in tracked:
+        z.write(ROOT / rel, f"{base}/src/amlc/{Path(rel).relative_to('src/amlc')}")
     for s in SCRIPTS:
         z.write(ROOT / "scripts" / s, f"{base}/src/{s}")
     z.writestr(f"{base}/README.md", README)

@@ -1,4 +1,4 @@
-"""Build the final submission zip in the official layout.
+"""Builds the final submission zip in the official layout.
 
 python scripts/make_submission_zip.py --outputs <dir with matching_results.tsv + candidate_pairs.tsv> \
     --doc docs/Documentation.md --zip submission.zip
@@ -30,36 +30,36 @@ tqdm==4.70.1
 torch==2.14.0
 transformers==5.17.0
 """
-README = """# Business Entity Resolution — code
+README = """# Business Entity Resolution - code
 
-Python 3.11/3.12. Stages 0–2 run on CPU (~6 h on 4 cores); stage 3 on one GPU (a T4 is enough).
-No external data, APIs or lookups. The only pretrained model is xlm-roberta-base (MIT licence, 278M parameters).
+Python 3.11 or 3.12. Stages 0-2 run on CPU (about 6 hours on 4 cores). Stage 3 needs one GPU (we used a T4).
+No external data or lookups are used. The only pretrained model is xlm-roberta-base (MIT licence, 278M parameters).
 
-## Layout
-- `src_v3/`  — the exact stage 0–2 code (commit 5d41c82) that produced the submitted candidate set and judge scores.
-- `src/`     — the latest code: same pipeline plus later improvements (France normaliser, holdout training,
-               sibling features, candidate budget), and stage 3 (`ce_rerank.py`), `final_thresholds.py`.
+## Folders
+- src_v3/ : the exact code of stages 0-2 used for the submitted file (git commit 5d41c82).
+- src/    : our latest code. Stage 3 lives here (ce_rerank.py), plus final_thresholds.py. It also has later changes
+            (France address rules, holdout training, extra features) that were not used for the submitted file.
 
-## Reproduce output/matching_results.tsv and output/candidate_pairs.tsv
+## Steps to reproduce output/matching_results.tsv and output/candidate_pairs.tsv
     pip install -r requirements.txt
 
-    # 1) stages 0-2 (normalise -> retrieve + LightGBM ranker -> LightGBM judge), exact submitted run
+    # 1) stages 0-2: cleaning, candidate search + LightGBM ranker, LightGBM judge
     cd src_v3 && PYTHONPATH=. python -u run_v2.py --data <dataset dir with train/ and test/> --out ../run --threads 4 && cd ..
-    #    -> run/dev_pairs_v2.parquet (held-out dev pairs), run/output/test_pairs.parquet (every scored test pair)
+    #    this writes run/dev_pairs_v2.parquet (held-out dev pairs) and run/output/test_pairs.parquet (all scored test pairs)
 
-    # 2) stage 3: multilingual cross-encoder, blended with the judge on the uncertain pairs
+    # 2) stage 3: cross-encoder, blended with the judge on the pairs the judge is unsure about
     export PYTHONPATH=src
     python -u src/ce_rerank.py build --pairs run/dev_pairs_v2.parquet --data <dataset dir> --out ce/train.parquet --easy-frac 0.3
     python -u src/ce_rerank.py train --in ce/train.parquet --model-dir ce/model --epochs 2 --bs 32 --max-len 160 --max-pairs 600000
     python -u src/ce_rerank.py train --in ce/train.parquet --model-dir ce/model_us --train-countries US --epochs 1 --max-pairs 150000
     python -u src/ce_rerank.py eval  --in ce/train.parquet --model-dir ce/model_us --all-pairs
     python -u src/ce_rerank.py eval  --in ce/train.parquet --model-dir ce/model --lo 0.01 --hi 0.99 --tag _b
-    python -u src/ce_rerank.py apply --test-pairs run/output/test_pairs.parquet --data <dataset dir> --model-dir ce/model \
+    python -u src/ce_rerank.py apply --test-pairs run/output/test_pairs.parquet --data <dataset dir> --model-dir ce/model \\
         --tag _b --unseen-blend ce/model_us/blend.json --unseen-band-only --unseen-threshold 0.7 --out ce/out
 
-    # 3) final thresholds (see Documentation_template.md for the values used)
-    python src/final_thresholds.py --pairs ce/out/test_pairs_blend.parquet --data <dataset dir> --out output \
-        --thr India=<t> US=<t> France=<t>
+    # 3) final thresholds (the values of our final submission)
+    python src/final_thresholds.py --pairs ce/out/test_pairs_blend.parquet --data <dataset dir> --out output \\
+        --thr India=0.90 US=0.97 France=0.90
 """
 
 p = argparse.ArgumentParser()

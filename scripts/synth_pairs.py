@@ -2,7 +2,7 @@
 
 Positive: a corrupted copy of S1 record A (operators and rates measured on 73,531 real US/India true pairs), paired with A.
 Negative (exact label): the same copy paired with a DIFFERENT real S1 of the same country sharing A's door, street or a
-name word (S1 is deduplicated, so different S1 = different businesses) — the sibling-decoy pattern.
+name word (S1 is deduplicated, so different S1 = different businesses) - the sibling-decoy pattern.
 Output has the columns of ce_rerank.py train.parquet (fold=train), so `ce_rerank.py train --in` can use it directly.
 
 python scripts/synth_pairs.py --data <dataset dir> --split test --country France --n-s1 40000 --out synth_fr.parquet
@@ -139,7 +139,7 @@ def main():
     p.add_argument("--neg-per-pos", type=int, default=1)
     p.add_argument("--out", required=True)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--exclude-dev", action="store_true", help="skip dev S1 (crc32 % 10 == 0) — for the India gate")
+    p.add_argument("--exclude-dev", action="store_true", help="skip dev S1 (crc32 % 10 == 0), used for the India check")
     a = p.parse_args()
     rng = np.random.default_rng(a.seed)
     s1 = pd.read_csv(f"{a.data}/{a.split}/{a.split}_source1.tsv", sep="\t", dtype=str, quoting=csv.QUOTE_NONE,

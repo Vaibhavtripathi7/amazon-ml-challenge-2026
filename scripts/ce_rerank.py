@@ -75,7 +75,7 @@ def h(x, salt, m):
 # ------------------------------------------------------------------ build
 def cmd_build(a):
     if Path(a.out).exists() and Path(a.out).with_name("val_truth.parquet").exists():
-        log(f"{a.out} already built — skipping")
+        log(f"{a.out} already built, skipping")
         return
     P = pd.read_parquet(a.pairs)
     # exact labels for EVERY pair from the ground truth (the saved is_true is exact only for dev S1)
@@ -137,7 +137,7 @@ def batches(tok, A, B, bs, max_len, order=None):
 def cmd_train(a):
     import torch
     if Path(a.model_dir, "TRAIN_DONE").exists():
-        log(f"{a.model_dir}: already trained (TRAIN_DONE) — skipping")
+        log(f"{a.model_dir}: already trained (TRAIN_DONE), skipping")
         return
     P = pd.read_parquet(a.inp)
     P = P[P.fold == "train"]

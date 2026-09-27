@@ -1,0 +1,325 @@
+"""Stage 3 (GPU): multilingual cross-encoder re-scoring on top of the LightGBM pipeline (Ditto-style).
+
+Why: the LightGBM judge learns hand-made similarities, so it transfers poorly to a country it never saw (France
+leaderboard ~0.81; leave-one-country-out penalty −0.021) and cannot read Indian scripts or French wording.
+A multilingual transformer reads both records directly (XLM-R: 100 languages incl. Devanagari/Kannada/Telugu/
+Tamil/Bengali/French). Candidates stay ours (small set per S1); only uncertain pairs and unseen countries are
+re-scored, then blended with the judge probability.
+
+Commands (each saves its output; re-run a command to resume after a disconnect):
+  build  --pairs <dev_pairs.parquet from judge_v2 dev> --data <dataset dir> --out ce/train.parquet
+         labelled pairs of DEV S1 only (labels exact), split by S1 into ce-train (80%) / ce-val (20%),
+         hard examples kept (judge prob in [lo, hi]) + a sample of easy ones; text = raw + parsed hints.
+  train  --in ce/train.parquet --model-dir ce/model [--train-countries US] [--base xlm-roberta-base]
+  eval   --in ce/train.parquet --model-dir ce/model --data <dataset dir>
+         ce-val: macro F0.5 per country for judge / CE / blend (same weighted dev metric as judge_v2 dev),
+         fits the blend (logistic, 2-fold on ce-val) and per-country thresholds -> <model-dir>/blend.json
+  apply  --test-pairs <test_pairs.parquet> --data <dataset dir> --model-dir ce/model --out ce/output
+         re-scores pairs with judge prob in [lo, hi] and every pair of --unseen countries (France), blends,
+         writes matching_results.tsv + candidate_pairs.tsv (same candidate set as the LightGBM run).
+"""
+import argparse
+import csv
+import json
+import math
+import time
+import zlib
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from amlc.metric import f05
+from amlc.norm import parse_address
+
+T0 = time.time()
+W_OTHER = 10.0   # weight of a wrong merge of a sampled distractor record (judge_v2 dev sampling); 1.0 for --dev-full pairs
+
+
+def log(msg):
+    print(f"{msg}  [{time.time() - T0:.0f}s]", flush=True)
+
+
+def read_tsv(path, ids=None):
+    parts = []
+    for ch in pd.read_csv(path, sep="\t", dtype=str, quoting=csv.QUOTE_NONE, keep_default_na=False, chunksize=500_000):
+        parts.append(ch if ids is None else ch[ch.entity_id.isin(ids)])
+    return pd.concat(parts, ignore_index=True)
+
+
+def texts(df):
+    """Ditto serialisation + domain-knowledge hints from our parser (house incl. France bis/ter, street, city, state)."""
+    out = []
+    for n, a, c in zip(df.business_name, df.business_address, df.country):
+        p = parse_address(a, c)
+        hint = " ".join(f"{k} {v}" for k, v in (("house", p["house"]), ("street", p["street"]), ("city", p["city"]),
+                                                ("state", p["state"])) if v)
+        out.append(f"{n} | {a} | {hint}")
+    return out
+
+
+def entity_text(data, split, ids):
+    ids = set(ids)
+    frames = [read_tsv(f"{data}/{split}/{split}_source{s}.tsv", ids) for s in (1, 2, 3)]
+    df = pd.concat(frames, ignore_index=True)
+    return pd.Series(texts(df), index=df.entity_id), df.set_index("entity_id").country
+
+
+def h(x, salt, m):
+    return zlib.crc32((x + salt).encode()) % m
+
+
+# ------------------------------------------------------------------ build
+def cmd_build(a):
+    P = pd.read_parquet(a.pairs)
+    P = P[P.is_dev_s1].reset_index(drop=True)                       # labels are exact only for dev S1
+    P["fold"] = np.where([h(s, "|ce", 5) == 0 for s in P.s1_id], "val", "train")
+    easy = (P.prob < a.lo) | (P.prob > a.hi)
+    rng = np.random.default_rng(0)
+    keep = (P.fold == "val") | ~easy | (rng.random(len(P)) < a.easy_frac)
+    P = P[keep].reset_index(drop=True)
+    log(f"dev-S1 pairs kept {len(P):,} (val {int((P.fold == 'val').sum()):,}); positives {int(P.is_true.sum()):,}")
+    tx, ctry = entity_text(a.data, "train", set(P.s1_id) | set(P.rec_id))
+    P["text_s1"], P["text_rec"] = tx.reindex(P.s1_id).to_numpy(), tx.reindex(P.rec_id).to_numpy()
+    P["country"] = ctry.reindex(P.s1_id).to_numpy()
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    P.to_parquet(a.out, index=False)
+    # truth for the metric: every true record of every dev S1 in ce-val (includes shortlist misses)
+    gt = read_tsv(f"{a.data}/train/train_ground_truth.tsv")
+    gt.columns = ["s1", "m"]
+    val_s1 = set(P.s1_id[P.fold == "val"]) | {s for s in gt.s1 if h(s, "", 10) == 0 and h(s, "|ce", 5) == 0}
+    gt = gt[gt.s1.isin(val_s1)]
+    gt.assign(country=ctry.reindex(gt.s1).to_numpy()).to_parquet(Path(a.out).with_name("val_truth.parquet"), index=False)
+    log(f"wrote {a.out} and val_truth.parquet ({len(gt):,} ce-val S1)")
+
+
+# ------------------------------------------------------------------ model
+def load_model(a, n_train=None):
+    import torch
+    from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(a.base)
+    if a.tiny:                                                       # smoke test: random tiny model, same tokenizer
+        cfg = AutoConfig.from_pretrained(a.base, num_labels=1, hidden_size=32, num_hidden_layers=2,
+                                         num_attention_heads=2, intermediate_size=64)
+        model = AutoModelForSequenceClassification.from_config(cfg)
+    elif Path(a.model_dir, "config.json").exists() and n_train is None:
+        model = AutoModelForSequenceClassification.from_pretrained(a.model_dir, num_labels=1)
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(a.base, num_labels=1)
+    if n_train is None and a.tiny and Path(a.model_dir, "model.pt").exists():
+        model.load_state_dict(torch.load(Path(a.model_dir, "model.pt"), map_location="cpu"))
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    return tok, model.to(dev), dev
+
+
+def batches(tok, A, B, bs, max_len, order=None):
+    idx = np.arange(len(A)) if order is None else order
+    for i in range(0, len(idx), bs):
+        j = idx[i:i + bs]
+        yield j, tok([A[k] for k in j], [B[k] for k in j], truncation=True, max_length=max_len, padding=True,
+                     return_tensors="pt")
+
+
+def cmd_train(a):
+    import torch
+    P = pd.read_parquet(a.inp)
+    P = P[P.fold == "train"]
+    if a.train_countries:
+        P = P[P.country.isin(a.train_countries)]
+    P = P.sample(frac=1.0, random_state=0).head(a.max_pairs).reset_index(drop=True)
+    tok, model, dev = load_model(a, n_train=len(P))
+    log(f"train pairs {len(P):,} (positives {int(P.is_true.sum()):,}) on {dev}; base {a.base}")
+    A, B, y = P.text_s1.tolist(), P.text_rec.tolist(), torch.tensor(P.is_true.to_numpy(), dtype=torch.float32)
+    steps = math.ceil(len(P) / a.bs) * a.epochs
+    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.01)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(1, int(0.06 * steps)))
+                                              * max(0.0, (steps - s) / steps))
+    scaler = torch.amp.GradScaler("cuda", enabled=dev == "cuda")
+    lossf = torch.nn.BCEWithLogitsLoss()
+    model.train()
+    step = 0
+    for ep in range(a.epochs):
+        order = np.random.default_rng(ep).permutation(len(P))
+        for j, enc in batches(tok, A, B, a.bs, a.max_len, order):
+            enc = {k: v.to(dev) for k, v in enc.items()}
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
+                out = model(**enc).logits.squeeze(-1)
+                loss = lossf(out.float(), y[j].to(dev))
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(opt)
+            scaler.update()
+            sched.step()
+            step += 1
+            if step % 200 == 0 or step == steps:
+                log(f"  epoch {ep} step {step}/{steps} loss {loss.item():.4f}")
+    Path(a.model_dir).mkdir(parents=True, exist_ok=True)
+    if a.tiny:
+        torch.save(model.state_dict(), Path(a.model_dir, "model.pt"))
+    else:
+        model.save_pretrained(a.model_dir)
+    tok.save_pretrained(a.model_dir)
+    log(f"model saved to {a.model_dir}")
+
+
+def predict(a, tok, model, dev, A, B):
+    import torch
+    order = np.argsort([len(x) + len(z) for x, z in zip(A, B)])     # length-sorted batches: little padding
+    out = np.zeros(len(A), np.float32)
+    model.eval()
+    with torch.no_grad():
+        for n, (j, enc) in enumerate(batches(tok, A, B, a.bs_pred, a.max_len, order)):
+            enc = {k: v.to(dev) for k, v in enc.items()}
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=dev == "cuda"):
+                out[j] = torch.sigmoid(model(**enc).logits.squeeze(-1).float()).cpu().numpy()
+            if n % 500 == 0:
+                log(f"  scored {min((n + 1) * a.bs_pred, len(A)):,}/{len(A):,}")
+    return out
+
+
+# ------------------------------------------------------------------ eval (ce-val) + blend
+def logit(p):
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def blend_prob(w, pj, pc):
+    z = w[0] + w[1] * logit(pj) + w[2] * logit(pc)
+    return 1 / (1 + np.exp(-z))
+
+
+def macro(V, truth, prob_col, thr, country):
+    """Weighted dev macro F0.5 (as judge_v2 dev): each record -> best S1 if prob >= its country's threshold;
+    wrong merges of sampled distractor records (full=False) count x10."""
+    b = V.sort_values(prob_col, ascending=False).drop_duplicates("rec_id")
+    b = b[b[prob_col].to_numpy() >= b.country.map(thr).to_numpy()]
+    tp = b[b.is_true].groupby("s1_id").size()
+    fp = b[~b.is_true].assign(w=np.where(b[~b.is_true].full, 1.0, W_OTHER)).groupby("s1_id").w.sum()
+    out = {}
+    for c in country:
+        ss = truth[truth.country == c]
+        sc = []
+        for s, T in zip(ss.s1, ss.n):
+            t_, f_ = tp.get(s, 0), fp.get(s, 0.0)
+            if T == 0:
+                sc.append(1.0 if f_ == 0 else 0.0)
+            elif t_ == 0:
+                sc.append(0.0)
+            else:
+                P_, R_ = t_ / (t_ + f_), t_ / T
+                sc.append(1.25 * P_ * R_ / (0.25 * P_ + R_))
+        out[c] = float(np.mean(sc))
+    return out
+
+
+def cmd_eval(a):
+    from sklearn.linear_model import LogisticRegression
+    P = pd.read_parquet(a.inp)
+    V = P[P.fold == "val"].reset_index(drop=True)
+    truth = pd.read_parquet(Path(a.inp).with_name("val_truth.parquet"))
+    truth["n"] = truth.m.map(lambda m: len([x for x in m.split(",") if x]))
+    tok, model, dev = load_model(a)
+    band = (V.prob >= a.lo) & (V.prob <= a.hi) if not a.all_pairs else np.ones(len(V), bool)
+    V["ce"] = V.prob.astype(np.float64)
+    V.loc[band, "ce"] = predict(a, tok, model, dev, V.text_s1[band].tolist(), V.text_rec[band].tolist())
+    log(f"ce-val pairs {len(V):,}; re-scored {int(band.sum()):,}")
+    # blend: logistic on (logit judge, logit ce), 2-fold by S1 on the re-scored band
+    fold2 = np.array([h(s, "|blend", 2) for s in V.s1_id])
+    V["blend"] = V.prob.astype(np.float64)
+    ws = []
+    for f in (0, 1):
+        tr, te = band & (fold2 != f), band & (fold2 == f)
+        X = np.c_[logit(V.prob[tr]), logit(V.ce[tr])]
+        lr = LogisticRegression(C=1.0).fit(X, V.is_true[tr])
+        w = [float(lr.intercept_[0]), float(lr.coef_[0][0]), float(lr.coef_[0][1])]
+        ws.append(w)
+        V.loc[te, "blend"] = blend_prob(np.array(w), V.prob[te].to_numpy(), V.ce[te].to_numpy())
+    w = np.mean(ws, axis=0)
+    countries = sorted(truth.country.dropna().unique())
+    res = {}
+    grid = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    for col in ("prob", "ce", "blend"):
+        best = {}
+        for c in countries:
+            sc = {t: macro(V[V.country == c], truth, col, {c: t}, [c])[c] for t in grid}
+            best[c] = max(sc, key=sc.get)
+            res[(col, c)] = (best[c], sc[best[c]])
+        print(f"  {col:6s} " + " | ".join(f"{c}: {res[(col, c)][1]:.4f} (t={res[(col, c)][0]})" for c in countries),
+              flush=True)
+    thr = {c: res[("blend", c)][0] for c in countries}
+    json.dump({"w": list(map(float, w)), "thr": thr, "lo": a.lo, "hi": a.hi,
+               "results": {f"{k[0]}|{k[1]}": v for k, v in res.items()}}, open(Path(a.model_dir, "blend.json"), "w"))
+    V[["s1_id", "rec_id", "country", "prob", "ce", "blend", "is_true", "full"]].to_parquet(
+        Path(a.model_dir, "val_scored.parquet"), index=False)
+    log(f"blend weights {np.round(w, 3).tolist()}, thresholds {thr} -> {a.model_dir}/blend.json")
+
+
+# ------------------------------------------------------------------ apply (test)
+def cmd_apply(a):
+    s1 = read_tsv(f"{a.data}/test/test_source1.tsv")[["entity_id", "country"]]
+    T = pd.read_parquet(a.test_pairs)
+    T["s1_id"] = s1.entity_id.to_numpy()[T.s1_idx.to_numpy()]
+    T["country"] = s1.country.to_numpy()[T.s1_idx.to_numpy()]
+    cfg = json.load(open(Path(a.model_dir, "blend.json")))
+    sel = ((T.prob >= a.lo) & (T.prob <= a.hi)) | T.country.isin(a.unseen or [])
+    log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{a.lo}, {a.hi}] + unseen {a.unseen})")
+    cache = Path(a.out, "ce_scores.parquet")
+    if cache.exists():
+        S = pd.read_parquet(cache)
+    else:
+        sub = T[sel]
+        tx, _ = entity_text(a.data, "test", set(sub.s1_id) | set(sub.rec_id))
+        tok, model, dev = load_model(a)
+        ce = predict(a, tok, model, dev, tx.reindex(sub.s1_id).tolist(), tx.reindex(sub.rec_id).tolist())
+        S = pd.DataFrame({"row": np.flatnonzero(sel.to_numpy()), "ce": ce})
+        Path(a.out).mkdir(parents=True, exist_ok=True)
+        S.to_parquet(cache, index=False)
+    p = T.prob.to_numpy().astype(np.float64).copy()
+    p[S.row.to_numpy()] = blend_prob(np.array(cfg["w"]), p[S.row.to_numpy()], S.ce.to_numpy())
+    T["prob"] = p
+    thr = dict(cfg["thr"])
+    thr_unseen = a.unseen_threshold if a.unseen_threshold is not None else max(thr.values())
+    for c in a.unseen or []:
+        thr.setdefault(c, thr_unseen)
+    best = T.sort_values("prob", ascending=False).drop_duplicates("rec_id")
+    best = best[best.prob.to_numpy() >= best.country.map(thr).fillna(thr_unseen).to_numpy()]
+    Path(a.out).mkdir(parents=True, exist_ok=True)
+    for fname, col, df in [("matching_results.tsv", "matched_entity_ids", best),
+                           ("candidate_pairs.tsv", "candidate_entity_ids", T)]:
+        lists = df.drop_duplicates(["s1_idx", "rec_id"]).groupby("s1_idx").rec_id.agg(",".join)
+        full = np.full(len(s1), "", dtype=object)
+        full[lists.index.to_numpy()] = lists.to_numpy()
+        pd.DataFrame({"source1_entity_id": s1.entity_id, col: full}).to_csv(Path(a.out) / fname, sep="\t", index=False)
+    T[["s1_idx", "rec_id", "prob"]].to_parquet(Path(a.out, "test_pairs_blend.parquet"), index=False)
+    log(f"wrote {a.out}: {len(best):,} matched records over {best.s1_idx.nunique():,} S1; thresholds {thr}")
+
+
+p = argparse.ArgumentParser()
+p.add_argument("cmd", choices=["build", "train", "eval", "apply"])
+p.add_argument("--pairs")
+p.add_argument("--data")
+p.add_argument("--out")
+p.add_argument("--in", dest="inp")
+p.add_argument("--model-dir", default="ce/model")
+p.add_argument("--base", default="xlm-roberta-base")
+p.add_argument("--tiny", action="store_true", help="smoke test with a tiny random model")
+p.add_argument("--train-countries", nargs="+", default=None, help="train only on these (unseen-country rehearsal)")
+p.add_argument("--test-pairs")
+p.add_argument("--unseen", nargs="+", default=["France"])
+p.add_argument("--unseen-threshold", type=float, default=None)
+p.add_argument("--lo", type=float, default=0.01, help="re-score pairs with judge prob in [lo, hi]")
+p.add_argument("--hi", type=float, default=0.99)
+p.add_argument("--easy-frac", type=float, default=0.15, help="build: share of easy train pairs kept")
+p.add_argument("--all-pairs", action="store_true", help="eval: re-score every ce-val pair (CE alone, no band)")
+p.add_argument("--max-pairs", type=int, default=2_000_000)
+p.add_argument("--epochs", type=int, default=1)
+p.add_argument("--bs", type=int, default=32)
+p.add_argument("--bs-pred", type=int, default=256)
+p.add_argument("--lr", type=float, default=2e-5)
+p.add_argument("--max-len", type=int, default=160)
+p.add_argument("--w-other", type=float, default=10.0, help="eval: 10 for sampled dev pairs, 1 for --dev-full pairs")
+a = p.parse_args()
+W_OTHER = a.w_other
+{"build": cmd_build, "train": cmd_train, "eval": cmd_eval, "apply": cmd_apply}[a.cmd](a)

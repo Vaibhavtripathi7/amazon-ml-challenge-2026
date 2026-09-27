@@ -36,7 +36,7 @@ Python 3.11 or 3.12. Stages 0-2 run on CPU (about 6 hours on 4 cores). Stage 3 n
 No external data or lookups are used. The only pretrained model is xlm-roberta-base (MIT licence, 278M parameters).
 
 ## Folders
-- src_v3/ : the exact code of stages 0-2 used for the submitted file (git commit 5d41c82).
+- src/v3/ : the exact code of stages 0-2 used for the submitted file (git commit 5d41c82).
 - src/    : our latest code. Stage 3 lives here (ce_rerank.py), plus final_thresholds.py. It also has later changes
             (France address rules, holdout training, extra features) that were not used for the submitted file.
 
@@ -44,7 +44,7 @@ No external data or lookups are used. The only pretrained model is xlm-roberta-b
     pip install -r requirements.txt
 
     # 1) stages 0-2: cleaning, candidate search + LightGBM ranker, LightGBM judge
-    cd src_v3 && PYTHONPATH=. python -u run_v2.py --data <dataset dir with train/ and test/> --out ../run --threads 4 && cd ..
+    cd src/v3 && PYTHONPATH=. python -u run_v2.py --data <dataset dir with train/ and test/> --out ../../run --threads 4 && cd ../..
     #    this writes run/dev_pairs_v2.parquet (held-out dev pairs) and run/output/test_pairs.parquet (all scored test pairs)
 
     # 2) stage 3: cross-encoder, blended with the judge on the pairs the judge is unsure about
@@ -84,7 +84,7 @@ with zipfile.ZipFile(a.zip, "w", zipfile.ZIP_DEFLATED) as z:
     for rel in v3_files:                                            # exact v3 code, from git history
         data = subprocess.run(["git", "-C", str(ROOT), "show", f"{V3_COMMIT}:{rel}"], capture_output=True, check=True).stdout
         dest = rel.replace("src/amlc", "amlc").replace("scripts/", "")
-        z.writestr(f"{base}/src_v3/{dest}", data)
+        z.writestr(f"{base}/src/v3/{dest}", data)
     z.writestr(f"{base}/README.md", README)
     z.writestr(f"{base}/requirements.txt", REQUIREMENTS)
     z.write(ROOT / a.doc, "Documentation_template.md")   # official file name

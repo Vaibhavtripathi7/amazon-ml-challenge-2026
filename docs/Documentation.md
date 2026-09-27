@@ -105,10 +105,58 @@ well to a new one, so for France we rely mostly on LightGBM.
 
 ---
 
+## 7. How We Validated
+- The training data was split by business into separate parts for the ranker, the classifier and validation, so no
+  model was ever scored on data it was trained on. Validation used 10% of the Source 1 businesses (220,907).
+- Our validation score for the first versions (0.975-0.981) was much higher than the leaderboard (0.946-0.957). We
+  traced this to the test set having about twice as many look-alike records per business. To check ideas under test-like
+  conditions we built smaller copies of the training data where 21% (and, for a harder version, 35%) of the businesses
+  were removed but their records were kept, which gives the same records per business as test.
+- Every change was compared to the previous version on the same businesses, with a paired bootstrap 95% confidence
+  interval. We only kept changes whose interval was above zero.
+- To estimate how we would do on France, which has no labels, we trained on the US only and tested on India.
+
+## 8. How the Solution Evolved
+
+| version | main change | validation F0.5 | public leaderboard |
+|---|---|---|---|
+| rules baseline | exact name key + house number | 0.554 (sample) | 0.56 |
+| v1 | LightGBM classifier on similarity features | 0.956 | - |
+| v2 | LightGBM ranker before the classifier, smaller candidate set | 0.975 | 0.946 |
+| v3 | India script dictionary, domain-name splitting, ambiguity features, deeper searches | 0.981 | 0.953 |
+| v3, stricter thresholds | thresholds tuned on the leaderboard | - | 0.957 |
+| v3 + transformer | xlm-roberta-base re-scoring the uncertain pairs | India 0.9838, US 0.9904 | 0.9708 |
+| final | same, thresholds raised to India 0.90 / US 0.97 / France 0.90 | - | **0.9738** |
+
+## 9. Problems We Faced
+- **Validation vs leaderboard gap.** Explained by the extra look-alike records in test (see section 7). Stricter
+  thresholds helped on the leaderboard every time, which matched what the test-like copies showed.
+- **France is not in the training data.** We added French address rules (departments mapped to regions, "bis"/"ter" kept
+  in the house number, French street words) from test data only, and tested transfer on India. We also tried synthetic
+  French training pairs built from the corruption patterns we measured; they made the transformer alone better on an
+  unseen country but did not improve the combined score, so we left them out.
+- **Bugs we found and fixed.** A pruning rule dropped candidates with negative ranker scores; a French house number
+  like "5 bis" lost its letter; a random tie-break made results differ between runs; and a slow membership check made
+  a late training run about 60 times slower, which is why that version (section B) could not finish in time.
+- **Compute.** Development was on a laptop with 5.7 GB of RAM, so full runs (about 6 hours) were done on Kaggle, and the
+  transformer was trained on a single T4 GPU in Google Colab (about 3 hours for 1.2M training examples).
+
+## 10. References
+- Li et al., "Deep Entity Matching with Pre-Trained Language Models" (Ditto), VLDB 2021. Serialising both records for a
+  transformer and adding hints from our parser.
+- Foursquare Location Matching (Kaggle 2022) top solutions: candidate search, LightGBM ranking, then a transformer on
+  the remaining candidates.
+- Paulsen et al., "Sparkly: A Simple yet Surprisingly Strong TF-IDF Blocker for Entity Matching", VLDB 2023.
+- Splink documentation on term-frequency adjustments, used for our name-frequency (ambiguity) features.
+- Wang et al., "Sudowoodo: Contrastive Self-supervised Learning for Multi-purpose Data Integration", ICDE 2023, and
+  work on domain adaptation of rankers with synthetic data, for our synthetic French pairs experiment.
+
+---
+
 ## Appendix
 
 ### A. Code Artefacts
-The code is in `code/business_entity_resolution/`. `src_v3/` is the exact code of stages 0-2 used for the submitted
+The code is in `code/business_entity_resolution/`. `src/v3/` is the exact code of stages 0-2 used for the submitted
 file (entry point `run_v2.py`, with `prepare.py`, `judge_v2.py` and the `amlc/` package). `src/` has our latest code,
 including `ce_rerank.py` for the transformer stage and `final_thresholds.py` for the last step. `README.md` lists every
 command in order, and `requirements.txt` has the pinned versions.

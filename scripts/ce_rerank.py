@@ -329,6 +329,32 @@ def per_s1(V, truth, col, thr):
     return pd.Series(f, index=truth.s1.to_numpy())
 
 
+def cmd_merge(a):
+    """Final file: probabilities from --test-pairs (e.g. Colab's blended US/India pairs), overridden for --unseen
+    countries by --override (e.g. Kaggle's France model); thresholds: seen from --model-dir/blend{tag}.json,
+    unseen --unseen-threshold. Writes matching_results.tsv + candidate_pairs.tsv."""
+    s1 = read_tsv(f"{a.data}/test/test_source1.tsv")[["entity_id", "country"]]
+    T = pd.read_parquet(a.test_pairs)
+    O = pd.read_parquet(a.override)
+    assert len(T) == len(O) and (T.rec_id.to_numpy() == O.rec_id.to_numpy()).all(), "pair files are not aligned"
+    T["country"] = s1.country.to_numpy()[T.s1_idx.to_numpy()]
+    m = T.country.isin(a.unseen or []).to_numpy()
+    T.loc[m, "prob"] = O.prob.to_numpy()[m]
+    thr = dict(json.load(open(Path(a.model_dir, f"blend{a.tag}.json")))["thr"])
+    for c in a.unseen or []:
+        thr[c] = a.unseen_threshold if a.unseen_threshold is not None else max(thr.values())
+    best = T.sort_values("prob", ascending=False).drop_duplicates("rec_id")
+    best = best[best.prob.to_numpy() >= best.country.map(thr).fillna(max(thr.values())).to_numpy()]
+    Path(a.out).mkdir(parents=True, exist_ok=True)
+    for fname, col, df in [("matching_results.tsv", "matched_entity_ids", best),
+                           ("candidate_pairs.tsv", "candidate_entity_ids", T)]:
+        lists = df.drop_duplicates(["s1_idx", "rec_id"]).groupby("s1_idx").rec_id.agg(",".join)
+        full = np.full(len(s1), "", dtype=object)
+        full[lists.index.to_numpy()] = lists.to_numpy()
+        pd.DataFrame({"source1_entity_id": s1.entity_id, col: full}).to_csv(Path(a.out) / fname, sep="\t", index=False)
+    log(f"merged {int(m.sum()):,} {a.unseen} pairs from {a.override}; thresholds {thr}; wrote {a.out}")
+
+
 def cmd_check(a):
     """Honest estimate: thresholds chosen on half A of the ce-val S1, scored on half B (and vice versa);
     paired bootstrap 95% CI of blend (and ce) minus judge, per country."""
@@ -381,6 +407,8 @@ def cmd_apply(a):
     cfg = json.load(open(Path(a.model_dir, f"blend{a.tag}.json")))
     lo, hi = (0.0, 1.0) if cfg.get("all_pairs") else (cfg["lo"], cfg["hi"])   # the band the blend was fitted on
     sel = ((T.prob >= lo) & (T.prob <= hi)) | (T.country.isin(a.unseen or []) & (not a.unseen_band_only))
+    if a.only_unseen:                                               # e.g. a France-only model: leave US/India untouched
+        sel &= T.country.isin(a.unseen or [])
     log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{lo}, {hi}] from blend{a.tag}.json + unseen {a.unseen})")
     Path(a.out, "chunks").mkdir(parents=True, exist_ok=True)
     sub = T[sel]
@@ -438,7 +466,7 @@ def cmd_apply(a):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("cmd", choices=["build", "train", "eval", "apply", "check"])
+    p.add_argument("cmd", choices=["build", "train", "eval", "apply", "check", "merge"])
     p.add_argument("--pairs")
     p.add_argument("--data")
     p.add_argument("--out")
@@ -465,6 +493,8 @@ def main():
     p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
     p.add_argument("--bands", nargs="+", default=None, help='check: footprints to compare, e.g. 0.01,0.99 0.001,0.999 0,1')
+    p.add_argument("--only-unseen", action="store_true", help="apply: re-score only the --unseen countries' pairs")
+    p.add_argument("--override", default=None, help="merge: pair file whose probabilities replace the --unseen ones")
     p.add_argument("--unseen-band-only", action="store_true",
                    help="apply: re-score unseen-country pairs only inside the band (not all of them)")
     p.add_argument("--unseen-blend", default=None, help="apply: blend.json fitted in the unseen-country rehearsal")
@@ -474,7 +504,8 @@ def main():
     a = p.parse_args()
     global W_OTHER
     W_OTHER = a.w_other
-    {"build": cmd_build, "train": cmd_train, "eval": cmd_eval, "apply": cmd_apply, "check": cmd_check}[a.cmd](a)
+    {"build": cmd_build, "train": cmd_train, "eval": cmd_eval, "apply": cmd_apply, "check": cmd_check,
+     "merge": cmd_merge}[a.cmd](a)
 
 
 if __name__ == "__main__":

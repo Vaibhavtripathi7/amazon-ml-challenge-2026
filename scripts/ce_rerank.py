@@ -78,21 +78,27 @@ def cmd_build(a):
         log(f"{a.out} already built — skipping")
         return
     P = pd.read_parquet(a.pairs)
-    P = P[P.is_dev_s1].reset_index(drop=True)                       # labels are exact only for dev S1
-    P["fold"] = np.where([h(s, "|ce", 5) == 0 for s in P.s1_id], "val", "train")
-    easy = (P.prob < a.lo) | (P.prob > a.hi)
-    rng = np.random.default_rng(0)
-    keep = (P.fold == "val") | ~easy | (rng.random(len(P)) < a.easy_frac)
+    # exact labels for EVERY pair from the ground truth (the saved is_true is exact only for dev S1)
+    gt0 = read_tsv(f"{a.data}/train/train_ground_truth.tsv")
+    gt0.columns = ["s1", "m"]
+    owner = {r: s for s, m in zip(gt0.s1, gt0.m) for r in m.split(",") if r}
+    P["is_true"] = [owner.get(r) == s for s, r in zip(P.s1_id, P.rec_id)]
+    val = P.is_dev_s1.to_numpy() & np.array([h(s, "|ce", 5) == 0 for s in P.s1_id])
+    P["fold"] = np.where(val, "val", "train")
+    # train: every negative (decoys) + every hard pair + a share of the easy positives; val: every dev-S1 pair
+    easy_pos = P.is_true.to_numpy() & ((P.prob > a.hi) | (P.prob < a.lo)).to_numpy()
+    keep = val | ~easy_pos | (np.random.default_rng(0).random(len(P)) < a.easy_frac)
     P = P[keep].reset_index(drop=True)
-    log(f"dev-S1 pairs kept {len(P):,} (val {int((P.fold == 'val').sum()):,}); positives {int(P.is_true.sum()):,}")
+    tr = P.fold == "train"
+    log(f"pairs kept {len(P):,}: train {int(tr.sum()):,} (positives {int(P.is_true[tr].sum()):,}, "
+        f"negatives {int((~P.is_true[tr]).sum()):,}) | val {int((~tr).sum()):,} dev-S1 pairs")
     tx, ctry = entity_text(a.data, "train", set(P.s1_id) | set(P.rec_id))
     P["text_s1"], P["text_rec"] = tx.reindex(P.s1_id).to_numpy(), tx.reindex(P.rec_id).to_numpy()
     P["country"] = ctry.reindex(P.s1_id).to_numpy()
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     P.to_parquet(a.out, index=False)
     # truth for the metric: every true record of every dev S1 in ce-val (includes shortlist misses)
-    gt = read_tsv(f"{a.data}/train/train_ground_truth.tsv")
-    gt.columns = ["s1", "m"]
+    gt = gt0
     val_s1 = set(P.s1_id[P.fold == "val"]) | {s for s in gt.s1 if h(s, "", 10) == 0 and h(s, "|ce", 5) == 0}
     gt = gt[gt.s1.isin(val_s1)]
     gt.assign(country=ctry.reindex(gt.s1).to_numpy()).to_parquet(Path(a.out).with_name("val_truth.parquet"), index=False)

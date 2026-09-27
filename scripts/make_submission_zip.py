@@ -7,7 +7,7 @@ Layout (official README):
   output/matching_results.tsv, output/candidate_pairs.tsv
   code/business_entity_resolution/src/   (the amlc package + the pipeline scripts)
   code/business_entity_resolution/README.md, requirements.txt (pinned)
-  Documentation.md (filled template)
+  Documentation_template.md (filled)
 """
 import argparse
 import subprocess
@@ -73,7 +73,7 @@ with zipfile.ZipFile(a.zip, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(ROOT / "scripts" / s, f"{base}/src/{s}")
     z.writestr(f"{base}/README.md", README)
     z.writestr(f"{base}/requirements.txt", REQUIREMENTS)
-    z.write(ROOT / a.doc, "Documentation.md")
+    z.write(ROOT / a.doc, "Documentation_template.md")   # official file name
 print(f"wrote {a.zip}")
 with zipfile.ZipFile(a.zip) as z:
     for i in z.infolist():

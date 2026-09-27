@@ -232,7 +232,7 @@ def cmd_train(a):
     log(f"train (stage 2): S1 {len(s1):,}; ranker {models['kind']} top-{op['top_n']} min_p {op.get('min_prob', 0)}; "
         f"features '{a.features}' ({len(feats)})")
     s1_ids = s1.entity_id.to_numpy()
-    kept_ids = np.asarray(s1_ids, dtype=object)
+    kept_ids = set(s1_ids.tolist())                                  # hash set: np.isin on text IDs is a Python loop
     Xs, ys, grp, distr, pc = [], [], [], [], []
     owned_n = kept_n = 0
     for i, recs in enumerate(iter_records(a.work, "train", set_keep(a, "judge", s1, owner, dev_ids), seg=make_segmenter(s1))):
@@ -240,7 +240,7 @@ def cmd_train(a):
         X = X[feats]
         own = owner.reindex(recs.entity_id.to_numpy()).to_numpy()
         y = (own[r_idx] == s1_ids[s_idx]).astype(np.int8)
-        distr.append(~np.isin(own[r_idx], kept_ids))             # no owner among the kept S1 (distractor or holdout orphan)
+        distr.append(~pd.Series(own[r_idx]).isin(kept_ids).to_numpy())   # no owner among the kept S1 (distractor or holdout orphan)
         owned_n += pd.Series(own).isin(set(s1_ids)).sum()
         kept_n += len(np.unique(r_idx[y == 1]))
         Xs.append(X)

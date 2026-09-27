@@ -307,11 +307,11 @@ def cmd_eval(a):
         print(f"  {col:6s} " + " | ".join(f"{c}: {res[(col, c)][1]:.4f} (t={res[(col, c)][0]})" for c in countries),
               flush=True)
     thr = {c: res[("blend", c)][0] for c in countries}
-    json.dump({"w": list(map(float, w)), "thr": thr, "lo": a.lo, "hi": a.hi,
-               "results": {f"{k[0]}|{k[1]}": v for k, v in res.items()}}, open(Path(a.model_dir, "blend.json"), "w"))
+    json.dump({"w": list(map(float, w)), "thr": thr, "lo": a.lo, "hi": a.hi, "all_pairs": a.all_pairs,
+               "results": {f"{k[0]}|{k[1]}": v for k, v in res.items()}}, open(Path(a.model_dir, f"blend{a.tag}.json"), "w"))
     V[["s1_id", "rec_id", "country", "prob", "ce", "blend", "is_true", "full"]].to_parquet(
-        Path(a.model_dir, "val_scored.parquet"), index=False)
-    log(f"blend weights {np.round(w, 3).tolist()}, thresholds {thr} -> {a.model_dir}/blend.json")
+        Path(a.model_dir, f"val_scored{a.tag}.parquet"), index=False)
+    log(f"blend weights {np.round(w, 3).tolist()}, thresholds {thr} -> {a.model_dir}/blend{a.tag}.json")
 
 
 def per_s1(V, truth, col, thr):
@@ -330,7 +330,7 @@ def per_s1(V, truth, col, thr):
 def cmd_check(a):
     """Honest estimate: thresholds chosen on half A of the ce-val S1, scored on half B (and vice versa);
     paired bootstrap 95% CI of blend (and ce) minus judge, per country."""
-    V = pd.read_parquet(Path(a.model_dir, "val_scored.parquet"))
+    V = pd.read_parquet(Path(a.model_dir, f"val_scored{a.tag}.parquet"))
     truth = pd.read_parquet(Path(a.inp).with_name("val_truth.parquet"))
     truth["n"] = truth.m.map(lambda m: len([x for x in m.split(",") if x]))
     if a.truth_in_pairs:
@@ -361,8 +361,8 @@ def cmd_apply(a):
     T = pd.read_parquet(a.test_pairs)
     T["s1_id"] = s1.entity_id.to_numpy()[T.s1_idx.to_numpy()]
     T["country"] = s1.country.to_numpy()[T.s1_idx.to_numpy()]
-    cfg = json.load(open(Path(a.model_dir, "blend.json")))
-    sel = ((T.prob >= a.lo) & (T.prob <= a.hi)) | T.country.isin(a.unseen or [])
+    cfg = json.load(open(Path(a.model_dir, f"blend{a.tag}.json")))
+    sel = (np.ones(len(T), bool) if cfg.get("all_pairs") else ((T.prob >= a.lo) & (T.prob <= a.hi))) | T.country.isin(a.unseen or [])
     log(f"test pairs {len(T):,}; re-scoring {int(sel.sum()):,} (band [{a.lo}, {a.hi}] + unseen {a.unseen})")
     Path(a.out, "chunks").mkdir(parents=True, exist_ok=True)
     sub = T[sel]
@@ -435,6 +435,7 @@ def main():
     p.add_argument("--ckpt-every", type=int, default=1500, help="train: checkpoint to --model-dir every N steps")
     p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
+    p.add_argument("--tag", default="", help="eval/check/apply: suffix for blend/val_scored files (compare variants)")
     p.add_argument("--truth-in-pairs", action="store_true", help="eval on a test slice: only S1 present in the pairs")
     p.add_argument("--w-other", type=float, default=10.0, help="eval: 10 for sampled dev pairs, 1 for --dev-full pairs")
     a = p.parse_args()

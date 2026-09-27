@@ -18,10 +18,10 @@ tok = UserSecretsClient().get_secret("GITHUB_TOKEN")
 ## Cell 2 — the v4 run (all steps; resumable: re-running skips finished steps)
 ```python
 import os
-os.environ["AMLC_TF_CHAR"] = "__CHAR__"   # "1" = character 3-gram retrieval pass (decided below), "0" = off
+os.environ["AMLC_TF_CHAR"] = "0"   # char 3-gram retrieval pass: OFF in v4 (E8); "1" only for a reserve run
 DATA = "/kaggle/input/datasets/vaibhavtripathi072/dataset-2026/data-2026/student_resource/student_resource/dataset"
 !python -u scripts/run_v2.py --data {DATA} --out /kaggle/working/v4 --threads 4 \
-    --judge-args="--holdout-s1 0.21 --max-cands 5.5 --features sib __ST__"
+    --judge-args="--holdout-s1 0.21 --max-cands 5.5 --features sib --st-countries France --st-rounds 300"
 !tail -60 /kaggle/working/v4/SUMMARY.txt
 ```
 What the flags do (each measured, see `docs/v4-gaps.md`):
@@ -30,7 +30,9 @@ What the flags do (each measured, see `docs/v4-gaps.md`):
 - `--max-cands 5.5`: candidate budget in rank_eval (smaller candidate set, organisers rank it higher).
 - `--features sib`: sibling features (typo vs swapped word, house distance).
 - The test step writes the submission with **per-country thresholds from dev**; France gets the strictest.
-__ST_NOTE__
+- `--st-countries France --st-rounds 300`: in the test step the judge adapts to France (never seen in training) with
+  its own confident France decisions, then France is rescored (+0.002 to +0.005 on the unseen-country rehearsal, E7).
+  US/India scores are untouched. The adapted model is saved as `models/judge_v2.txt.st`.
 
 ## Cell 3 — alternative thresholds from the saved pairs (minutes, no re-scoring)
 ```python

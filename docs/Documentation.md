@@ -28,7 +28,7 @@ The key insight: the test set has about twice as many look-alike decoy records p
 ---
 
 ## 3. Candidate Generation (Blocking)
-- **Blocking keys used:** 8 exact keys (sorted-word name key, homoglyph-folded name, space-stripped name, name + house number, house + street, name + city, rare name words), capped by frequency; word TF-IDF on the cleaned name (top 20) and on name + address tokens (top 40), per country; [v4: character 3-gram TF-IDF on the name if kept].
+- **Blocking keys used:** 8 exact keys (sorted-word name key, homoglyph-folded name, space-stripped name, name + house number, house + street, name + city, rare name words), capped by frequency; word TF-IDF on the cleaned name (top 20) and on name + address tokens (top 40), per country. (A character 3-gram TF-IDF pass was measured: +0.5% retrieval for India at full scale, but no gain after the candidate budget on labelled data and +2.5 h runtime, so it is not used.)
 - **Pruning:** a LightGBM ranker (binary) scores every (record, S1) candidate on key hits, TF-IDF scores/ranks and quick similarities; we keep the top N per record above a probability cut. N and the cut are chosen on held-out data under a candidate budget, the smallest set within 0.001 of the best achievable F0.5.
 - **Candidate pairs generated:** [v4: TO FILL] (v3: 6.16 per S1 on test).
 - **How you ensured true matches were not lost:** multiple independent retrievers (name, address, keys) unioned before pruning; recall measured at every stage on held-out records (shortlist ceiling, recall after pruning); stage-1 operating point chosen by the F0.5 ceiling, not by size alone.
@@ -42,8 +42,8 @@ The key insight: the test set has about twice as many look-alike decoy records p
 - Address features: token-set / partial ratios, IDF-weighted address coverage, house-number relation (equal / digit dropped / substituted / missing; France keeps `bis`/`ter`), number-set Jaccard, house numeric and edit distance, street and city similarity/equality, state agreement (departments mapped to regions for France).
 - Other: retrieval signals (which keys hit, TF-IDF scores and ranks), stage-1 probability and rank, competition within the record's candidate set (gap to the best candidate), ambiguity (namesake counts, shortlist size, stage-1 margin), source.
 
-**Model type:** LightGBM (gradient-boosted trees), binary objective; one pooled judge (it transfers to France) [v4: per-country judges if kept].
-**Threshold selection method:** macro F0.5 per S1 on a held-out, test-density validation set (holdout world), per country; each record goes to its single best S1 if its probability passes the threshold.
+**Model type:** LightGBM (gradient-boosted trees), binary objective; one pooled judge for all countries (per-country judges were tested and lost: the countries share most corruption patterns). For France, unseen in training, the judge is adapted by **self-training**: its own confident France decisions (best candidate p ≥ 0.95 → match, its rivals → non-match; best p ≤ 0.05 → non-match) train 300 extra boosting rounds, then France is rescored. On a leave-one-country-out rehearsal (train US, score India) this gave +0.002 to +0.005.
+**Threshold selection method:** macro F0.5 per S1 on a held-out, test-density validation set (holdout world), chosen per country; France (no validation data) uses the strictest of them. Each record goes to its single best S1 if its probability passes its country's threshold.
 
 ---
 
@@ -66,4 +66,14 @@ A careful normaliser plus a two-stage LightGBM pipeline reaches high precision a
 `code/business_entity_resolution/`: `src/amlc/` (library: `norm.py` stage 0, `keys.py` / `blocking.py` / `stage.py` stage 1, `judge_features.py` stage 2, `metric.py`), `src/prepare.py`, `src/judge_v2.py`, `src/run_v2.py` (entry point: runs every step resumably and writes `output/matching_results.tsv` and `output/candidate_pairs.tsv`), `README.md` (exact commands), `requirements.txt` (pinned).
 
 ### B. Additional Results
-[v4 experiment table: TO FILL from docs/v4-gaps.md]
+Test-like validation (5% of train S1, 21% of non-validation S1 removed = test density; "harsh" = 35% removed), macro F0.5,
+paired bootstrap 95% CI vs the v3-style model:
+| variant | candidates / S1 | test-like | harsh | Δ test-like | Δ harsh |
+|---|---|---|---|---|---|
+| v3-style | 4.76 | 0.9894 | 0.9873 | — | — |
+| + holdout training + candidate budget | 4.06 | 0.9894 | 0.9885 | +0.0000 [−0.0008, +0.0009] | +0.0011 [+0.0003, +0.0020] |
+| + sibling features (**final**) | 4.06 | 0.9906 | 0.9896 | +0.0013 [+0.0004, +0.0022] | +0.0023 [+0.0012, +0.0033] |
+| + decoy weight ×2 (rejected) | 4.06 | 0.9901 | 0.9892 | +0.0007 | +0.0019 |
+| + per-country judges (rejected) | 4.06 | 0.9902 | 0.9891 | +0.0009 | +0.0018 |
+| + char 3-gram pass (rejected) | 3.97 | 0.9893 | 0.9884 | −0.0000 | +0.0010 |
+Rejected after measurement: graph post-processing over twin records (17% of same-name + same-house twins belong to different businesses; −0.0005).

@@ -56,7 +56,7 @@ behaves on a country it has never seen (trained on the US, tested on India) and 
   each skipped when the key is too common. We also run TF-IDF searches per country on the cleaned name (top 20) and on
   name + address words (top 40). Indian-script words are first mapped to English with a word list learned from train
   pairs, and website-style names are split into words.
-- **Pruning:** a LightGBM ranker (LambdaRank objective) scores every (record, business) candidate from the key matches,
+- Pruning: a LightGBM ranker (LambdaRank objective) scores every (record, business) candidate from the key matches,
   the TF-IDF scores and ranks, and a few quick similarity measures. We keep up to 3 candidates per record. The cut-off
   was chosen on held-out data as the smallest candidate set within 0.001 of the best possible F0.5.
 - **Candidate pairs generated:** 10,670,181 on test (6.16 per business).
@@ -104,7 +104,7 @@ on the public leaderboard, which improved the score both times. Final thresholds
   the other), adding the transformer raised India from 0.9752 to 0.9838 (+0.0085, 95% confidence interval +0.0074 to
   +0.0097) and the US from 0.9873 to 0.9904 (+0.0031, interval +0.0025 to +0.0037). On the uncertain pairs the AUC went
   from 0.9354 (LightGBM) to 0.9789 (transformer). Public leaderboard: 0.957 before the transformer, 0.9738 final.
-- **A check on test:** with the thresholds chosen on validation, the transformer file left 5.6% of the test businesses
+- As a check on test: with the thresholds chosen on validation, the transformer file left 5.6% of the test businesses
   with no match, the same share of businesses without matches that we measured on the leaderboard (section 7). The
   final, stricter file leaves 5.8% empty.
 - **Common false positives (wrong merges):** records without an address that are matched on the name alone, records
@@ -153,22 +153,22 @@ both the model choices and the thresholds moved in the right direction.
 | v3, stricter thresholds | France 0.7 (or US and India 0.55) instead of 0.4 | - | 0.957 |
 | v3 + transformer | xlm-roberta-base re-scoring the uncertain pairs (India 0.7, US 0.9, France 0.7) | India 0.9838, US 0.9904 | 0.9708 |
 | thresholds up | India 0.85, US 0.95, France 0.85 | - | 0.9731 |
-| final | India 0.90, US 0.97, France 0.90 | - | **0.9738** |
+| final | India 0.90, US 0.97, France 0.90 | - | 0.9738 |
 
 ## 9. Problems We Faced
-- **Validation vs leaderboard gap.** Explained by the extra look-alike records in test (section 7). Stricter thresholds
+- Validation vs leaderboard gap. This was explained by the extra look-alike records in test (section 7). Stricter thresholds
   helped on the leaderboard every time, which matched what the test-like copies showed.
-- **France is not in the training data.** We added French address rules (departments mapped to regions, "bis" and "ter"
+- France is not in the training data. We added French address rules (departments mapped to regions, "bis" and "ter"
   kept as part of the house number, French street words), learned from the test data only. A transformer trained
   without French data did not transfer well, so we also tried synthetic French training pairs, made by applying the
   corruption patterns we measured in section 2.1 to real French businesses, with other French businesses at the same
   address or street as the negatives. They made the transformer alone much better on an unseen country (0.8909 to
   0.9263 on India) but did not improve the combined score, so we left them out.
-- **Bugs we found and fixed.** A pruning rule meant for probabilities also removed every candidate with a negative
+- Bugs we found and fixed. A pruning rule meant for probabilities also removed every candidate with a negative
   LambdaRank score; a French house number such as "5 bis" lost its letter; a random tie-break made results differ
   between runs; and a slow membership check on 1.8M text IDs made our last full run about 60 times slower, which is why
   that version (appendix B) could not finish before the deadline.
-- **Compute.** We developed on a laptop with 5.7 GB of RAM, so full runs (about 6 hours) were done on Kaggle, and the
+- Compute. We developed on a laptop with 5.7 GB of RAM, so full runs (about 6 hours) were done on Kaggle, and the
   transformer was trained on a single T4 GPU in Google Colab. When the Colab GPU quota ran out, we moved the trained
   model to Kaggle and finished scoring there.
 

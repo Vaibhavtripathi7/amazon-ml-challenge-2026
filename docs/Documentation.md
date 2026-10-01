@@ -60,7 +60,7 @@ behaves on a country it has never seen (trained on the US, tested on India) and 
   the TF-IDF scores and ranks, and a few quick similarity measures. We keep up to 3 candidates per record. The cut-off
   was chosen on held-out data as the smallest candidate set within 0.001 of the best possible F0.5.
 - **Candidate pairs generated:** 10,670,181 on test (6.16 per business).
-- **How we made sure true matches were not lost:** several independent searches are combined before pruning, and we
+- **How you ensured true matches were not lost:** several independent searches are combined before pruning, and we
   measured recall after each step on held-out data: 98.7% of true records are found by the searches and 97.1% are still
   there after pruning.
 
@@ -69,10 +69,10 @@ behaves on a country it has never seen (trained on the US, tested on India) and 
 ## 4. Matching Model
 
 **Features used:**
-- Name: fuzzy string ratios (token set, token sort, partial), Jaro-Winkler, the same ratios on the look-alike-merged and
+- Name features: fuzzy string ratios (token set, token sort, partial), Jaro-Winkler, the same ratios on the look-alike-merged and
   no-space names, IDF-weighted word overlap per country, legal suffix agreement or conflict, alias match
   (formerly / dba), and whether the name looks like a website.
-- Address: fuzzy ratios, IDF-weighted word overlap, how the house numbers compare (same, one digit missing, different,
+- Address features: fuzzy ratios, IDF-weighted word overlap, how the house numbers compare (same, one digit missing, different,
   missing), overlap of all numbers, street and city similarity, and whether the states agree.
 - Other: which searches found the pair, the TF-IDF scores and ranks, the ranker score and rank, how far this candidate is
   from the best candidate of the same record, how common the name is among businesses and records, how many

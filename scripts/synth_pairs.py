@@ -1,9 +1,9 @@
-"""Synthetic labelled pairs for a country without labels (France), from real S1 records only. See docs/france-synth.md.
+"""Synthetic labelled pairs for a country without labels (France), from real S1 records only.
 
 Positive: a corrupted copy of S1 record A (operators and rates measured on 73,531 real US/India true pairs), paired with A.
 Negative (exact label): the same copy paired with a DIFFERENT real S1 of the same country sharing A's door, street or a
 name word (S1 is deduplicated, so different S1 = different businesses) - the sibling-decoy pattern.
-Output has the columns of ce_rerank.py train.parquet (fold=train), so `ce_rerank.py train --in` can use it directly.
+Output has the columns of ce_rerank.py train.parquet (fold=train), so ce_rerank.py train --in can use it directly.
 
 python scripts/synth_pairs.py --data <dataset dir> --split test --country France --n-s1 40000 --out synth_fr.parquet
 """
@@ -63,7 +63,7 @@ def typo(w, rng):
 
 
 def corrupt_name(name, country, rng):
-    """Rates from docs/france-synth.md (US/India averages; France uses its own vocabulary)."""
+    """Rates measured on real US/India true pairs; France uses its own vocabulary."""
     sufs = SUFFIX[country]
     words = name.split()
     suf_idx = [i for i, w in enumerate(words) if w.strip(".,").upper() in {s.upper() for s in sufs}
@@ -162,7 +162,7 @@ def main():
     for d, r in FR_DEPT.items():
         region_to_dept.setdefault(r, []).append(d.title().replace(" ", "-"))
     pool = np.arange(len(s1))
-    if a.exclude_dev:   # never build synthetic pairs from dev S1 (they are the held-out businesses gate 1 scores on)
+    if a.exclude_dev:   # never build synthetic pairs from dev S1 (they are the held-out businesses we score on)
         pool = pool[[zlib.crc32(x.encode()) % 10 != 0 for x in s1.entity_id]]
     pick = rng.choice(pool, min(a.n_s1, len(pool)), replace=False)
     rows = []

@@ -252,7 +252,7 @@ def cmd_train(a):
     pc = np.concatenate(pc)
     del Xs, ys
     log(f"judge pairs {len(y):,}; owned records whose owner reached the judge: {kept_n / max(owned_n, 1):.4f}")
-    wts = np.where((y == 0) & distr, a.distractor_weight, 1.0)    # branch B: make distractor mistakes cost more
+    wts = np.where((y == 0) & distr, a.distractor_weight, 1.0)    # optionally make mistakes on records with no owner cost more
     val = grp == 0
     params = dict(objective="binary", learning_rate=0.08, num_leaves=255, min_data_in_leaf=200, feature_fraction=0.8,
                   bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, num_threads=a.threads, verbose=-1)
@@ -261,7 +261,7 @@ def cmd_train(a):
                   callbacks=[lgb.early_stopping(100, verbose=False), lgb.log_evaluation(200)])
     Path(a.model).parent.mkdir(parents=True, exist_ok=True)
     m.save_model(a.model, num_iteration=m.best_iteration)
-    if a.per_country:   # G5: one judge per training country; the pooled model above serves unseen countries (France)
+    if a.per_country:   # one judge per training country; the pooled model above serves unseen countries (France)
         for c in sorted(set(pc)):
             k = pc == c
             mc = lgb.train(params, lgb.Dataset(X[~val & k], y[~val & k], weight=wts[~val & k]), 3000,
@@ -310,7 +310,7 @@ def scored(a, split, keep_fn):
 
 
 def self_train(a, judge, parts, st):
-    """G4: adapt the judge to a country it never saw in training (France) with its own confident decisions.
+    """Adapt the judge to a country it never saw in training (France) with its own confident decisions.
     Per record: best candidate p >= st_hi -> 1 and its other candidates -> 0; best p <= st_lo -> all 0.
     A few boosting rounds continue from the trained judge (init_model); then that country is rescored."""
     P = pd.concat([parts[i][k].assign(chunk=i) for i, k, _ in st], ignore_index=True)
@@ -344,7 +344,7 @@ def cmd_dev(a):
         holder["dev_ids"] = dev_ids
         return set_keep(a, "devfull" if a.dev_full else "dev", s1, owner, dev_ids)
     s1, pairs = scored(a, "train", keep_fn)
-    w_other = (1.0 if a.dev_full else DEV_OTHER_WEIGHT) * a.dev_distractor_scale   # branch B: test-like density
+    w_other = (1.0 if a.dev_full else DEV_OTHER_WEIGHT) * a.dev_distractor_scale   # optional extra weight on sampled wrong merges
     dev_ids = holder["dev_ids"]
     dev_idx = np.flatnonzero(s1.entity_id.isin(dev_ids).to_numpy())
     pos = pd.Series(np.arange(len(s1)), index=s1.entity_id)
@@ -398,7 +398,7 @@ def cmd_dev(a):
 
 def write_outputs(s1_ids, pairs, t, out, country=None):
     """pairs: [s1_idx, rec_id, prob] (all scored = the judge's input). Each record goes to its best S1 if prob >= t.
-    t is a number, or {country: threshold} (then `country` = array of S1 countries aligned with s1_ids)."""
+    t is a number, or {country: threshold} (then country = array of S1 countries aligned with s1_ids)."""
     best = pairs.sort_values("prob", ascending=False).drop_duplicates("rec_id")
     if isinstance(t, dict):
         tt = pd.Series(country[best.s1_idx.to_numpy()]).map(t).fillna(t.get("default", 0.5)).to_numpy()
@@ -462,7 +462,7 @@ p.add_argument("--st-countries", nargs="+", default=None,
 p.add_argument("--st-hi", type=float, default=0.95)
 p.add_argument("--st-lo", type=float, default=0.05)
 p.add_argument("--st-rounds", type=int, default=100)
-p.add_argument("--per-country", action="store_true", help="train: also one judge per training country (G5)")
+p.add_argument("--per-country", action="store_true", help="train: also one judge per training country")
 p.add_argument("--max-cands", type=float, default=None, help="rank_eval: candidate budget per dev S1")
 p.add_argument("--tol", type=float, default=0.001, help="max F0.5-ceiling loss accepted to shrink the candidate set")
 p.add_argument("--rank-objective", default="binary", choices=["binary", "lambdarank", "auto"])

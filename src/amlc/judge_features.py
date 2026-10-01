@@ -1,4 +1,4 @@
-"""Judge v1 features for (S1 row, record row) pairs, built on stage-0 columns (n_*, a_*) + cleaned `nums`.
+"""Judge v1 features for (S1 row, record row) pairs, built on stage-0 columns (n_*, a_*) + cleaned nums.
 
 Similarities only: no raw text, IDs or country as features (nothing to memorise; France is not an unseen category).
 Sources: Data Forensics doc (house-number relation, suffix conditional, IDF specificity, containment, margin),

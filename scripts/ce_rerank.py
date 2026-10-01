@@ -1,7 +1,7 @@
 """Stage 3 (GPU): multilingual cross-encoder re-scoring on top of the LightGBM pipeline (Ditto-style).
 
 Why: the LightGBM judge learns hand-made similarities, so it transfers poorly to a country it never saw (France
-leaderboard ~0.81; leave-one-country-out penalty −0.021) and cannot read Indian scripts or French wording.
+leaderboard ~0.81; leave-one-country-out penalty -0.021) and cannot read Indian scripts or French wording.
 A multilingual transformer reads both records directly (XLM-R: 100 languages incl. Devanagari/Kannada/Telugu/
 Tamil/Bengali/French). Candidates stay ours (small set per S1); only uncertain pairs and unseen countries are
 re-scored, then blended with the judge probability.
@@ -31,7 +31,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))   # works without `pip install -e .`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))   # works without pip install -e .
 from amlc.metric import f05  # noqa: E402
 from amlc.norm import parse_address  # noqa: E402
 
@@ -204,8 +204,8 @@ def cmd_train(a):
                             "scaler": scaler.state_dict(), "step": step}, tmp)
                 tmp.replace(ckpt)                                   # atomic: a half-written checkpoint never wins
                 log(f"  checkpoint saved at step {step}")
-            if a.stop_after_steps and step >= a.stop_after_steps:  # test hook: simulate a disconnect
-                log("stopping early (test hook)")
+            if a.stop_after_steps and step >= a.stop_after_steps:  # for testing resume after a disconnect
+                log("stopping early (--stop-after-steps)")
                 return
     if a.tiny:
         torch.save(model.state_dict(), Path(a.model_dir, "model.pt"))
@@ -490,7 +490,7 @@ def main():
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--max-len", type=int, default=160)
     p.add_argument("--ckpt-every", type=int, default=1500, help="train: checkpoint to --model-dir every N steps")
-    p.add_argument("--stop-after-steps", type=int, default=0, help="test hook: stop training early")
+    p.add_argument("--stop-after-steps", type=int, default=0, help="stop training early (used to test resuming)")
     p.add_argument("--chunk", type=int, default=200_000, help="apply: pairs per saved scoring chunk")
     p.add_argument("--bands", nargs="+", default=None, help='check: footprints to compare, e.g. 0.01,0.99 0.001,0.999 0,1')
     p.add_argument("--only-unseen", action="store_true", help="apply: re-score only the --unseen countries' pairs")

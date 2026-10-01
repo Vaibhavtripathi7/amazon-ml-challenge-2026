@@ -55,7 +55,7 @@ def row_keys(df, dfreq, kind):
 
 
 def filter_s1_keys(s1_keys, cap=30):
-    """Drop S1 key values shared by more than `cap` S1 rows (too unspecific). Do once, reuse per record chunk."""
+    """Drop S1 key values shared by more than cap S1 rows (too unspecific). Do once, reuse per record chunk."""
     out = {}
     for k, S in s1_keys.items():
         size = S.key.map(S.key.value_counts())
@@ -73,5 +73,5 @@ def join_keys(s1_keys_filtered, rec_keys):
 
 
 def key_candidates(s1_keys, rec_keys, cap=30):
-    """Join record keys to S1 keys per key type; S1 key values shared by more than `cap` S1 rows are skipped."""
+    """Join record keys to S1 keys per key type; S1 key values shared by more than cap S1 rows are skipped."""
     return join_keys(filter_s1_keys(s1_keys, cap), rec_keys)

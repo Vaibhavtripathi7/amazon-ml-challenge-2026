@@ -60,6 +60,14 @@ No external data or lookups are used. The only pretrained model is xlm-roberta-b
     # 3) final thresholds (the values of our final submission)
     python src/final_thresholds.py --pairs ce/out/test_pairs_blend.parquet --data <dataset dir> --out output \\
         --thr India=0.90 US=0.97 France=0.90
+
+## Notes
+- Stage 3 starts from the public pretrained weights of xlm-roberta-base (MIT licence). The transformers library downloads
+  them from Hugging Face on the first run. To run fully offline, download the model folder once and pass its path with
+  --base to the ce_rerank.py train commands.
+- No other external data is used. Everything else is learned from the provided training data.
+- The stage 0-2 run is deterministic apart from Python's hash seed (set PYTHONHASHSEED=0 to fix it). GPU training of the
+  transformer is not bit-for-bit repeatable, so a rerun can differ slightly in the last decimals.
 """
 
 p = argparse.ArgumentParser()

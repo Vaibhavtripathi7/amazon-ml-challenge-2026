@@ -1,7 +1,7 @@
-"""Judge v2 = untrimmed V1 shortlist -> STAGE 1 ranker (keeps top-N per record) -> STAGE 2 judge -> decision.
+"""The LightGBM pipeline: untrimmed shortlist -> stage 1 ranker (keeps top-N per record) -> stage 2 judge -> decision.
 
 Run in order (all on the same --work):
-  rank_train : train stage-1 ranker on the 'rank' record set; compares binary vs lambdarank vs the v1 rule
+  rank_train : train stage-1 ranker on the 'rank' record set; compares binary vs lambdarank vs a simple rule
   rank_eval  : on dev, grid of (top-N, min stage-1 prob) -> recall, candidates per S1, F0.5 ceiling; picks the
                smallest candidate set within --tol of the best ceiling; saves it next to the rank model
   train      : stage-2 judge on the 'judge' record set (stage-1 survivors; stage-1 score/rank as features)
@@ -206,7 +206,7 @@ def stage12(sl, ctx, s1, recs, models, op, threads, name_counts):
     sc = ranker_score(models, X1)
     amb = ambiguity_features(f, sc, recs, s1, name_counts)
     keep, rank = top_n(f.rec_idx.to_numpy(), sc, op["top_n"])
-    if op.get("legacy_cut"):                                         # v3 exactly (5d41c82): cut for any ranker
+    if op.get("legacy_cut"):                                         # original behaviour: the cut applies to any ranker
         keep &= sc >= (op.get("min_prob") or 0.0)
     elif models["kind"] == "binary" and op.get("min_prob") is not None:   # probability cut: binary ranker only
         keep &= sc >= op["min_prob"]
@@ -446,10 +446,10 @@ def cmd_rethreshold(a):
 p = argparse.ArgumentParser()
 p.add_argument("cmd", choices=["rank_train", "rank_eval", "train", "dev", "test", "rethreshold"])
 p.add_argument("--work", default="work")
-p.add_argument("--rank-model", default="models/rank_v2.txt")
-p.add_argument("--model", default="models/judge_v2.txt")
+p.add_argument("--rank-model", default="models/rank.txt")
+p.add_argument("--model", default="models/judge.txt")
 p.add_argument("--out", default="output")
-p.add_argument("--dev-pairs-out", default="dev_pairs_v2.parquet")
+p.add_argument("--dev-pairs-out", default="dev_pairs.parquet")
 p.add_argument("--split", default="test")
 p.add_argument("--threshold", type=float, default=None)
 p.add_argument("--by-country", nargs="+", default=None, help="rethreshold: India=0.7 US=0.5 France=0.6 default=0.6")

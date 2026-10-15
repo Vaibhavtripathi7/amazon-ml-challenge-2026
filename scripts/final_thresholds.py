@@ -1,7 +1,7 @@
 """Write the submission from blended test pairs with explicit per-country thresholds (the final step).
 
-python final_thresholds.py --pairs <out>/test_pairs_blend.parquet --data <dataset dir> --out output \
-    --thr India=0.85 US=0.95 France=0.85
+python scripts/final_thresholds.py --pairs <out>/test_pairs_blend.parquet --data <dataset dir> --out output \\
+    --thr India=0.90 US=0.97 France=0.90
 Each record goes to its single best S1 if the blended probability passes that S1's country threshold.
 candidate_pairs.tsv = every pair the models scored (the matching set is a subset).
 """

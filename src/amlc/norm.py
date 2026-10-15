@@ -1,4 +1,4 @@
-"""Stage 0: undo the generator's corruption operators (catalogue: Data Forensics doc) and parse into slots.
+"""Stage 0: undo the corruptions we found in the data and parse names and addresses into fields.
 
 parse_name(raw)            -> core, key (sorted), fold (OCR-homoglyph folded), flat (space-stripped), suffix,
                               alias, is_domain

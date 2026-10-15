@@ -1,8 +1,8 @@
-"""Judge v1 features for (S1 row, record row) pairs, built on stage-0 columns (n_*, a_*) + cleaned nums.
+"""Judge features for (S1 row, record row) pairs, built on stage-0 columns (n_*, a_*) + cleaned nums.
 
 Similarities only: no raw text, IDs or country as features (nothing to memorise; France is not an unseen category).
-Sources: Data Forensics doc (house-number relation, suffix conditional, IDF specificity, containment, margin),
-Splink author (IDF weighting, distinguishability), Foursquare solutions (string similarity set).
+Ideas from our own data analysis (house-number relation, legal suffix, IDF specificity, containment, margin),
+Splink (IDF weighting, distinguishability) and the Foursquare Location Matching solutions (string similarities).
 """
 import collections
 import math

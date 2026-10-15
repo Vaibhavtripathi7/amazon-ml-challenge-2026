@@ -1,12 +1,12 @@
-"""Resumable end-to-end runner for judge v2. Every step writes into --out and leaves a DONE marker; a restart
-skips finished steps. Logs are kept in <out>/logs/<step>.log. Designed for Kaggle "Save & Run All (Commit)",
-where everything under /kaggle/working is saved as the notebook's output.
+"""Resumable end-to-end runner for the LightGBM pipeline. Every step writes into --out and leaves a DONE marker,
+so a restart skips finished steps. Logs are kept in <out>/logs/<step>.log. Built for long Kaggle runs, where a
+session can stop at any time.
 
-  python -u scripts/run_v2.py --data <dataset dir> --out /kaggle/working/v2 [--work-in <prepared dir>]
+  python -u scripts/run.py --data <dataset dir> --out run [--work-in <prepared dir>]
          [--stop-after rank_eval] [--threads 4]
 
 Layout of --out: work/ (cleaned parquet, unless --work-in), models/, logs/, output/ (submission files),
-dev_pairs_v2.parquet, DONE_<step> markers, SUMMARY.txt (key lines from every step).
+dev_pairs.parquet, DONE_<step> markers, SUMMARY.txt (key lines from every step).
 """
 import argparse
 import subprocess
@@ -22,7 +22,7 @@ p.add_argument("--work-in", default=None, help="already-prepared parquet dir (sk
 p.add_argument("--stop-after", default=None, choices=STEPS)
 p.add_argument("--threads", type=int, default=4)
 p.add_argument("--sample", type=float, default=None)
-p.add_argument("--judge-args", default="", help='extra args for every judge_v2 step, e.g. "--tol 0.0002"')
+p.add_argument("--judge-args", default="", help='extra args for every judge.py step, e.g. "--tol 0.0002"')
 a = p.parse_args()
 
 out = Path(a.out)
@@ -30,16 +30,16 @@ for d in ("models", "logs", "output"):
     (out / d).mkdir(parents=True, exist_ok=True)
 here = Path(__file__).parent
 work = a.work_in or str(out / "work")
-common = ["--work", work, "--rank-model", str(out / "models/rank_v2.txt"), "--model", str(out / "models/judge_v2.txt"),
+common = ["--work", work, "--rank-model", str(out / "models/rank.txt"), "--model", str(out / "models/judge.txt"),
           "--threads", str(a.threads)] + (["--sample", str(a.sample)] if a.sample else []) + a.judge_args.split()
 validator = Path(a.data).parent / "utils" / "validate_submission.py"
 cmds = {
     "prepare": [str(here / "prepare.py"), "--data", a.data, "--out", work, "--workers", str(a.threads)],
-    "rank_train": [str(here / "judge_v2.py"), "rank_train"] + common,
-    "rank_eval": [str(here / "judge_v2.py"), "rank_eval"] + common,
-    "train": [str(here / "judge_v2.py"), "train"] + common,
-    "dev": [str(here / "judge_v2.py"), "dev"] + common + ["--dev-pairs-out", str(out / "dev_pairs_v2.parquet")],
-    "test": [str(here / "judge_v2.py"), "test"] + common + ["--out", str(out / "output")],
+    "rank_train": [str(here / "judge.py"), "rank_train"] + common,
+    "rank_eval": [str(here / "judge.py"), "rank_eval"] + common,
+    "train": [str(here / "judge.py"), "train"] + common,
+    "dev": [str(here / "judge.py"), "dev"] + common + ["--dev-pairs-out", str(out / "dev_pairs.parquet")],
+    "test": [str(here / "judge.py"), "test"] + common + ["--out", str(out / "output")],
     "validate": [str(validator), "--matching", str(out / "output/matching_results.tsv"),
                  "--candidate", str(out / "output/candidate_pairs.tsv"), "--test-dir", str(Path(a.data) / "test")],
 }

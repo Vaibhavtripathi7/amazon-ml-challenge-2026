@@ -14,7 +14,7 @@ def frame(rows):
 
 
 S1 = frame([
-    ["S1-a", "US", "Morganica Mendez Summit Plutonian LLC", "128 Vermilion Way, Collierville, TN"],
+    ["S1-a", "US", "Halvorsen Quill Meridian Plutonian LLC", "128 Sablewood Way, Collierville, TN"],
     ["S1-b", "US", "Dermatology Group", "40 Oak Street, Austin, TX"],
     ["S1-c", "US", "Dermatology Group", "900 Pine Road, Dallas, TX"],
 ])
@@ -27,7 +27,7 @@ def cands(recs, cap=30):
 
 
 def test_pseudoword_name_found_by_address_keys():
-    c = cands(frame([["S2-x", "US", "Gildlumxylo", "128 VERMILION WAY, COLLIERVILLE, TN"]]))
+    c = cands(frame([["S2-x", "US", "Zorvexilam", "128 SABLEWOOD WAY, COLLIERVILLE, TN"]]))
     assert set(c.s1_id) == {"S1-a"} and "house_street" in set(c["pass"])
 
 
@@ -38,7 +38,7 @@ def test_namesake_resolved_by_house_street_not_name():
 
 
 def test_domain_form_found_by_flat_key():
-    c = cands(frame([["S3-z", "US", "morganicamendezsummitplutonian.com", ""]]))
+    c = cands(frame([["S3-z", "US", "halvorsenquillmeridianplutonian.com", ""]]))
     assert "S1-a" in set(c[c["pass"] == "flat"].s1_id)
 
 

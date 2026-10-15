@@ -1,5 +1,5 @@
-"""Shared pipeline pieces for judge v2: loading, record streaming, the untrimmed V1 shortlist, and the cheap
-stage-1 (ranker) features. judge_v1.py keeps its own copies so upload #2 stays reproducible.
+"""Shared pipeline pieces: loading, record streaming, the untrimmed shortlist, and the cheap stage-1 (ranker)
+features.
 
 Record sets are fixed, disjoint hash buckets of the record id (crc32 % 100), so no record is ever in two sets:
   rank  : 0-3    stage-1 ranker training      (records owned by dev S1 excluded)
@@ -118,7 +118,7 @@ def record_set(name, owner, dev_ids, sample_s1_ids=None, sample=None):
 
 
 class Shortlister:
-    """V1 shortlist, UNTRIMMED: 8 exact keys + tf_name (k=10) + tf_mix (k=20), fitted once on S1."""
+    """Untrimmed shortlist: 8 exact keys + tf_name (top 20) + tf_mix (top 40), fitted once on S1."""
 
     def __init__(self, s1, cap=30, threads=4):
         self.dfreq = token_df(s1)

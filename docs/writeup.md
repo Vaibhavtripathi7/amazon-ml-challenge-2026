@@ -189,10 +189,12 @@ both the model choices and the thresholds moved in the right direction.
 ## Appendix
 
 ### A. Code Artefacts
-The code is in `code/business_entity_resolution/`. `src/v3/` is the exact code of stages 0-2 used for the submitted
-file (entry point `run_v2.py`, with `prepare.py`, `judge_v2.py` and the `amlc/` package). `src/` has our latest code,
-including `ce_rerank.py` for the transformer stage and `final_thresholds.py` for the last step. `README.md` lists every
-command in order, and `requirements.txt` has the pinned versions.
+The library is in `src/amlc/` (cleaning and parsing in `norm.py` and `clean.py`, candidate search in `keys.py`,
+`blocking.py` and `stage.py`, judge features in `judge_features.py`, the metric in `metric.py`). The entry points are in
+`scripts/`: `run.py` runs stages 0-2 end to end (it calls `prepare.py` and `judge.py`), `ce_rerank.py` is the transformer
+stage, and `final_thresholds.py` writes the final files. The README lists every command in order. Our leaderboard file
+was produced with an earlier revision of stages 0-2, before the French address rules and the ranker fix were added;
+the code here is the final version.
 
 ### B. Additional Results
 These changes were tested on the test-like copies from section 7 (thresholds chosen on the test-like copy and reused

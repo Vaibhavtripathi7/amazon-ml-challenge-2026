@@ -1,18 +1,19 @@
 """Stage 3 (GPU): multilingual cross-encoder re-scoring on top of the LightGBM pipeline (Ditto-style).
 
-Why: the LightGBM judge learns hand-made similarities, so it transfers poorly to a country it never saw (France
-leaderboard ~0.81; leave-one-country-out penalty -0.021) and cannot read Indian scripts or French wording.
+Why: the LightGBM judge learns hand-made similarities, so it transfers poorly to a country it never saw (France is
+not in train; training on the US only and testing on India cost -0.021) and it cannot read Indian scripts or French
+wording.
 A multilingual transformer reads both records directly (XLM-R: 100 languages incl. Devanagari/Kannada/Telugu/
 Tamil/Bengali/French). Candidates stay ours (small set per S1); only uncertain pairs and unseen countries are
 re-scored, then blended with the judge probability.
 
 Commands (each saves its output; re-run a command to resume after a disconnect):
-  build  --pairs <dev_pairs.parquet from judge_v2 dev> --data <dataset dir> --out ce/train.parquet
-         labelled pairs of DEV S1 only (labels exact), split by S1 into ce-train (80%) / ce-val (20%),
+  build  --pairs <dev_pairs.parquet from judge.py dev> --data <dataset dir> --out ce/train.parquet
+         every pair labelled from the ground truth; held-out dev S1 are split into ce-train (80%) / ce-val (20%);
          hard examples kept (judge prob in [lo, hi]) + a sample of easy ones; text = raw + parsed hints.
   train  --in ce/train.parquet --model-dir ce/model [--train-countries US] [--base xlm-roberta-base]
   eval   --in ce/train.parquet --model-dir ce/model --data <dataset dir>
-         ce-val: macro F0.5 per country for judge / CE / blend (same weighted dev metric as judge_v2 dev),
+         ce-val: macro F0.5 per country for judge / CE / blend (same weighted dev metric as judge.py dev),
          fits the blend (logistic, 2-fold on ce-val) and per-country thresholds -> <model-dir>/blend.json
   apply  --test-pairs <test_pairs.parquet> --data <dataset dir> --model-dir ce/model --out ce/output
          re-scores pairs with judge prob in [lo, hi] and every pair of --unseen countries (France), blends,
@@ -36,7 +37,7 @@ from amlc.metric import f05  # noqa: E402
 from amlc.norm import parse_address  # noqa: E402
 
 T0 = time.time()
-W_OTHER = 10.0   # weight of a wrong merge of a sampled distractor record (judge_v2 dev sampling); 1.0 for --dev-full pairs
+W_OTHER = 10.0   # weight of a wrong merge of a sampled distractor record (judge.py dev sampling); 1.0 for --dev-full pairs
 
 
 def log(msg):
@@ -244,7 +245,7 @@ def blend_prob(w, pj, pc):
 
 
 def macro(V, truth, prob_col, thr, country):
-    """Weighted dev macro F0.5 (as judge_v2 dev): each record -> best S1 if prob >= its country's threshold;
+    """Weighted dev macro F0.5 (as judge.py dev): each record -> best S1 if prob >= its country's threshold;
     wrong merges of sampled distractor records (full=False) count x10."""
     b = V.sort_values(prob_col, ascending=False).drop_duplicates("rec_id")
     b = b[b[prob_col].to_numpy() >= b.country.map(thr).to_numpy()]
@@ -330,8 +331,8 @@ def per_s1(V, truth, col, thr):
 
 
 def cmd_merge(a):
-    """Final file: probabilities from --test-pairs (e.g. Colab's blended US/India pairs), overridden for --unseen
-    countries by --override (e.g. Kaggle's France model); thresholds: seen from --model-dir/blend{tag}.json,
+    """Final file: probabilities from --test-pairs (e.g. the blended US/India pairs of one run), overridden for
+    --unseen countries by --override (e.g. the France pairs of another run); thresholds: seen from --model-dir/blend{tag}.json,
     unseen --unseen-threshold. Writes matching_results.tsv + candidate_pairs.tsv."""
     s1 = read_tsv(f"{a.data}/test/test_source1.tsv")[["entity_id", "country"]]
     T = pd.read_parquet(a.test_pairs)
@@ -437,7 +438,7 @@ def cmd_apply(a):
     p = T.prob.to_numpy().astype(np.float64).copy()
     rows_, ce_ = S.row.to_numpy(), S.ce.to_numpy()
     w_seen = np.array(cfg["w"])
-    # unseen countries (France): weights fitted in the unseen-country rehearsal (Cell 6: US-only model scored on India),
+    # unseen countries (France): weights fitted when a US-only model was scored on India,
     # where the transformer transferred poorly (India 0.8909 alone) and the blend had to lean on the judge
     w_unseen = np.array(json.load(open(a.unseen_blend))["w"]) if a.unseen_blend else w_seen
     uns = T.country.to_numpy()[rows_]
